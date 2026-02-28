@@ -1,0 +1,42 @@
+# Build results
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+
+# User-specific files
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Local data directories
+pr_data/
+analysis_results/
+job_status/
+
+# Environment files
+.env
+.env.local
+
+# Dependencies
+packages/
+node_modules/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
