@@ -11,6 +11,9 @@ namespace PullRequestAnalyzer.Messages
         public PullRequestData PullRequestData { get; set; }
         public string? WebhookUrl { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        /// <summary>Redis Streams message ID — set by RedisJobQueue after dequeue.</summary>
+        public string? StreamMessageId { get; set; }
     }
 
     /// <summary>

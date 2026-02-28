@@ -90,14 +90,20 @@ dev: ## Start everything for development (Docker + API)
 	@docker-compose -f $(DOCKER_COMPOSE) up -d
 	@echo "$(GREEN)✓ Docker services started$(NC)"
 	@echo ""
-	@echo "$(YELLOW)Step 2: Waiting for RabbitMQ to be ready...$(NC)"
+	@echo "$(YELLOW)Step 2: Waiting for Redis to be ready...$(NC)"
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		echo "  Attempt $$i/10..."; \
+		docker-compose -f $(DOCKER_COMPOSE) exec -T redis redis-cli ping | grep -q PONG && echo "$(GREEN)✓ Redis is ready!$(NC)" && break; \
+		sleep 2; \
+	done
+	@echo "$(YELLOW)Step 3: Waiting for RabbitMQ to be ready...$(NC)"
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
 		echo "  Attempt $$i/10..."; \
 		docker-compose -f $(DOCKER_COMPOSE) exec -T rabbitmq rabbitmq-diagnostics -q ping && echo "$(GREEN)✓ RabbitMQ is ready!$(NC)" && break; \
 		sleep 2; \
 	done
 	@echo ""
-	@echo "$(YELLOW)Step 3: Building project...$(NC)"
+	@echo "$(YELLOW)Step 4: Building project...$(NC)"
 	@$(DOTNET) build --configuration Release > /dev/null 2>&1
 	@echo "$(GREEN)✓ Build completed$(NC)"
 	@echo ""
@@ -105,11 +111,13 @@ dev: ## Start everything for development (Docker + API)
 	@echo "$(BLUE)║  Starting API Server                                       ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(GREEN)✓ RabbitMQ Management UI: http://localhost:15672$(NC)"
-	@echo "$(GREEN)✓ API Swagger: http://localhost:5000/swagger$(NC)"
-	@echo "$(GREEN)✓ API Health: http://localhost:5000/health$(NC)"
+	@echo "$(GREEN)✓ Redis              : http://localhost:6379$(NC)"
+	@echo "$(GREEN)✓ Redis Commander UI : http://localhost:8081$(NC)"
+	@echo "$(GREEN)✓ RabbitMQ UI        : http://localhost:15672 (guest/guest)$(NC)"
+	@echo "$(GREEN)✓ API Swagger        : http://localhost:5000/swagger$(NC)"
+	@echo "$(GREEN)✓ API Health         : http://localhost:5000/health$(NC)"
 	@echo ""
-	@echo "$(YELLOW)Starting API...$(NC)"
+	@echo "$(YELLOW)Starting API + Background Worker...$(NC)"
 	@$(DOTNET) run
 
 # ==================== TEST TARGETS ====================
@@ -144,8 +152,10 @@ info: ## Display project information
 	@echo "  Runtime: $(shell $(DOTNET) --version)"
 	@echo ""
 	@echo "$(BLUE)Docker Services:$(NC)"
-	@echo "  - RabbitMQ (port 5672)"
-	@echo "  - RabbitMQ Management UI (port 15672)"
+	@echo "  - Redis              (port 6379)"
+	@echo "  - Redis Commander UI (port 8081)"
+	@echo "  - RabbitMQ           (port 5672)"
+	@echo "  - RabbitMQ UI        (port 15672)"
 	@echo ""
 	@echo "$(BLUE)API Endpoints:$(NC)"
 	@echo "  - Health: http://localhost:5000/health"
