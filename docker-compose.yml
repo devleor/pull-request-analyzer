@@ -1,10 +1,6 @@
 version: "3.9"
 
 services:
-
-  # ---------------------------------------------------------------------------
-  # Redis — Cache + Queue (Redis Streams) + RedLock
-  # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: pr-analyzer-redis
@@ -18,33 +14,28 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
+      start_period: 5s
 
-  # ---------------------------------------------------------------------------
-  # Redis Commander — Web UI for Redis inspection
-  # ---------------------------------------------------------------------------
   redis-commander:
     image: rediscommander/redis-commander:latest
     container_name: pr-analyzer-redis-ui
     restart: unless-stopped
     environment:
-      - REDIS_HOSTS=local:redis:6379
+      REDIS_HOSTS: local:redis:6379
     ports:
       - "8081:8081"
     depends_on:
       redis:
         condition: service_healthy
 
-  # ---------------------------------------------------------------------------
-  # RabbitMQ — Message Broker for MassTransit (async events/sagas)
-  # ---------------------------------------------------------------------------
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: pr-analyzer-rabbitmq
     restart: unless-stopped
     ports:
-      - "5672:5672"    # AMQP
-      - "15672:15672"  # Management UI
+      - "5672:5672"
+      - "15672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
@@ -54,7 +45,8 @@ services:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 15s
 
 volumes:
   redis_data:
