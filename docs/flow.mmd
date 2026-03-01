@@ -8,90 +8,64 @@ flowchart TD
     subgraph API["🌐 ASP.NET Core API"]
         A1[POST /api/v2/analyze-async]
         A2[GET /api/v2/jobs/:jobId]
-        A3[GET /api/pull-requests/:owner/:repo/:number]
-        A4[GET /api/pull-requests/:owner/:repo/:number/commits]
     end
 
-    subgraph WORKER["⚙️ Background Worker Service\n(IHostedService)"]
-        W1[AnalyzePullRequestConsumer]
+    subgraph WORKER["⚙️ RedisBackgroundWorker\n(IHostedService)"]
+        W1[ProcessAsync]
         W2[LLMAnalysisService]
-        W3[DiffChunkingService]
-        W4[JobStatusService]
-        W5[WebhookService]
+        W3[WebhookService]
     end
 
-    subgraph QUEUE["📨 RabbitMQ"]
-        Q1[[AnalyzePullRequestCommand Queue]]
-        Q2[[PullRequestAnalyzedEvent]]
-        Q3[[PullRequestAnalysisFailedEvent]]
+    subgraph REDIS["💾 Redis"]
+        R1["queue:analyze (Stream)"]
+        R2["cache:pr:* (String)"]
+        R3["cache:analysis:* (String)"]
+        R4["job:* (String)"]
+        R5["lock:analyze:* (String)"]
     end
 
     subgraph EXTERNAL["🔌 External Services"]
-        E1[(GitHub API\nghp_token)]
-        E2[(OpenRouter LLM\nsk-or-key)]
-    end
-
-    subgraph STORAGE["💾 Local Storage"]
-        S1[(pr_data/)]
-        S2[(analysis_results/)]
-        S3[(job_status/)]
+        E1[(GitHub API)]
+        E2[(OpenRouter LLM)]
     end
 
     %% Client → API
     C1 -->|"POST /analyze-async\n{pr_data, webhook_url}"| A1
     C2 -->|"GET /jobs/:jobId"| A2
-    C1 -->|"GET /pull-requests/..."| A3
-    C1 -->|"GET /commits/..."| A4
 
-    %% API → Queue
-    A1 -->|"1. Create job (queued)"| W4
-    A1 -->|"2. Publish command"| Q1
+    %% API → Redis
+    A1 -->|"1. Create job (queued)"| R4
+    A1 -->|"2. LPUSH to queue:analyze"| R1
     A1 -->|"3. Return 202 + job_id"| C1
 
-    %% API → GitHub (v1 sync endpoints)
-    A3 -->|"Fetch PR metadata"| E1
-    A4 -->|"Fetch commits + diffs"| E1
-
-    %% Queue → Worker
-    Q1 -->|"Consume"| W1
+    %% Worker → Redis (Queue)
+    W1 -->|"XREADGROUP from queue:analyze"| R1
 
     %% Worker flow
-    W1 -->|"Update status: processing"| W4
+    W1 -->|"Acquire lock"| R5
+    W1 -->|"Check cache"| R3
     W1 -->|"Analyze PR"| W2
-    W2 -->|"Chunk large diffs"| W3
-    W3 -->|"Chunked diffs"| W2
+    W2 -->|"Fetch from GitHub"| E1
+    E1 -->|"Cache PR data"| R2
     W2 -->|"Prompt + diffs"| E2
     E2 -->|"Structured analysis"| W2
-    W2 -->|"AnalysisResult"| W1
-    W1 -->|"Update status: completed"| W4
-    W1 -->|"Publish event"| Q2
-    W1 -->|"Notify client"| W5
-    W5 -->|"POST webhook"| C3
-
-    %% Failure path
-    W1 -->|"On error"| Q3
-    W1 -->|"Update status: failed"| W4
-    W5 -->|"POST failure webhook"| C3
-
-    %% Storage
-    W4 <-->|"Read/Write"| S3
-    E1 -->|"Cache PR data"| S1
-    W2 -->|"Cache results"| S2
+    W2 -->|"Cache analysis"| R3
+    W1 -->|"Update job status"| R4
+    W1 -->|"Notify client"| W3
+    W3 -->|"POST webhook"| C3
 
     %% Status polling
-    A2 -->|"Read job"| W4
+    A2 -->|"Read job"| R4
 
     %% Styles
     classDef apiStyle fill:#4A90D9,stroke:#2C5F8A,color:#fff
     classDef workerStyle fill:#7B68EE,stroke:#4B3DB5,color:#fff
-    classDef queueStyle fill:#F5A623,stroke:#C47D0E,color:#fff
+    classDef redisStyle fill:#D82C20,stroke:#A31F17,color:#fff
     classDef externalStyle fill:#50C878,stroke:#2E8B57,color:#fff
-    classDef storageStyle fill:#708090,stroke:#4A5568,color:#fff
     classDef clientStyle fill:#FF6B6B,stroke:#C0392B,color:#fff
 
-    class A1,A2,A3,A4 apiStyle
-    class W1,W2,W3,W4,W5 workerStyle
-    class Q1,Q2,Q3 queueStyle
+    class A1,A2 apiStyle
+    class W1,W2,W3 workerStyle
+    class R1,R2,R3,R4,R5 redisStyle
     class E1,E2 externalStyle
-    class S1,S2,S3 storageStyle
     class C1,C2,C3 clientStyle
