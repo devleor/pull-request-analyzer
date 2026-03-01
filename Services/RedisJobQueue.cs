@@ -6,12 +6,12 @@ namespace PullRequestAnalyzer.Services;
 
 public sealed class RedisJobQueue
 {
-    private const string StreamKey    = "queue:analyze";
-    private const string DlqKey       = "queue:analyze:dlq";
-    private const string GroupName    = "pr-analyzers";
-    private const string ConsumerName = "worker-1";
-    private const int    BatchSize    = 10;
+    private const string StreamKey  = "queue:analyze";
+    private const string DlqKey     = "queue:analyze:dlq";
+    private const string GroupName  = "pr-analyzers";
+    private const int    BatchSize  = 10;
 
+    private readonly string   _consumerName = $"worker-{Environment.MachineName}-{Guid.NewGuid():N}";
     private readonly IDatabase _db;
     private readonly ILogger<RedisJobQueue> _logger;
 
@@ -44,7 +44,7 @@ public sealed class RedisJobQueue
         try
         {
             var entries = await _db.StreamReadGroupAsync(
-                StreamKey, GroupName, ConsumerName, ">", count: BatchSize);
+                StreamKey, GroupName, _consumerName, ">", count: BatchSize);
 
             foreach (var entry in entries)
             {
@@ -81,13 +81,6 @@ public sealed class RedisJobQueue
         await AcknowledgeAsync(messageId);
 
         _logger.LogWarning("Moved {MessageId} to DLQ. Reason: {Reason}", messageId, reason);
-    }
-
-    public Task<long> GetQueueLengthAsync()  => _db.StreamLengthAsync(StreamKey);
-    public async Task<long> GetPendingCountAsync()
-    {
-        var info = await _db.StreamPendingAsync(StreamKey, GroupName);
-        return info.PendingMessageCount;
     }
 
     private async Task EnsureConsumerGroupAsync()

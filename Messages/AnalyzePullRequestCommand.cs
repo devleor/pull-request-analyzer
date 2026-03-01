@@ -11,14 +11,3 @@ public sealed class AnalyzePullRequestCommand
     public string?         StreamMessageId { get; set; }
 }
 
-public sealed record PullRequestAnalyzedEvent(
-    string         JobId,
-    int            PrNumber,
-    AnalysisResult AnalysisResult,
-    DateTime       CompletedAt);
-
-public sealed record PullRequestAnalysisFailedEvent(
-    string   JobId,
-    int      PrNumber,
-    string   ErrorMessage,
-    DateTime FailedAt);

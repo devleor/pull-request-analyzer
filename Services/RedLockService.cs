@@ -22,7 +22,7 @@ public sealed class RedLockService : IDisposable
         _factory = RedLockFactory.Create([new RedLockMultiplexer(redis)]);
     }
 
-    public async Task<IRedLock?> AcquireAsync(string owner, string repo, int prNumber)
+    private async Task<IRedLock?> AcquireAsync(string owner, string repo, int prNumber)
     {
         var resource = $"{LockPrefix}{owner}/{repo}/{prNumber}";
         var redLock  = await _factory.CreateLockAsync(resource, Expiry, Wait, Retry);

@@ -51,8 +51,6 @@ public sealed class RedisCacheService
         return ids;
     }
 
-    public Task DeleteAsync(string key) => _db.KeyDeleteAsync(key);
-
     private async Task<T?> GetAsync<T>(string key)
     {
         try

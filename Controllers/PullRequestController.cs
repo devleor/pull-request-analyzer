@@ -8,12 +8,12 @@ namespace PullRequestAnalyzer.Controllers;
 [Route("api/pull-requests")]
 public sealed class PullRequestController : ControllerBase
 {
-    private readonly GitHubIngestService _github;
-    private readonly RedisCacheService   _cache;
+    private readonly IGitHubService    _github;
+    private readonly RedisCacheService _cache;
     private readonly ILogger<PullRequestController> _logger;
 
     public PullRequestController(
-        GitHubIngestService github,
+        IGitHubService github,
         RedisCacheService cache,
         ILogger<PullRequestController> logger)
     {
@@ -26,13 +26,11 @@ public sealed class PullRequestController : ControllerBase
     public async Task<ActionResult<PullRequestData>> GetPullRequest(
         string owner, string repo, int number)
     {
-        var id = new PrIdentifier(owner, repo, number);
-
         var cached = await _cache.GetPrAsync<PullRequestData>(owner, repo, number);
         if (cached is not null)
             return Ok(cached);
 
-        _logger.LogInformation("Fetching PR {Id} from GitHub", id);
+        _logger.LogInformation("Fetching PR {Owner}/{Repo}#{Number} from GitHub", owner, repo, number);
 
         var pr = await _github.FetchPullRequestAsync(owner, repo, number);
         await _cache.SetPrAsync(owner, repo, number, pr);
