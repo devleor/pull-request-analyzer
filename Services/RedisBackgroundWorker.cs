@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using PullRequestAnalyzer.Controllers;
 using PullRequestAnalyzer.Messages;
 using PullRequestAnalyzer.Models;
@@ -67,6 +68,12 @@ public sealed class RedisBackgroundWorker : BackgroundService
         var pr    = cmd.PullRequestData;
         var msgId = cmd.StreamMessageId ?? string.Empty;
 
+        using var activity = Telemetry.Source.StartActivity("worker.process_job", ActivityKind.Consumer);
+        activity?.SetTag("job.id",      cmd.JobId);
+        activity?.SetTag("pr.owner",    pr.Owner);
+        activity?.SetTag("pr.repo",     pr.Repo);
+        activity?.SetTag("pr.number",   pr.Number);
+
         _logger.LogInformation("[Job {JobId}] Starting PR {Id}", cmd.JobId, pr.ToIdentifier());
 
         await SetStatusAsync(cmd.JobId, "processing", pr.Number);
@@ -75,12 +82,17 @@ public sealed class RedisBackgroundWorker : BackgroundService
         {
             try
             {
-                var result = await _cache.GetAnalysisAsync<AnalysisResult>(pr.Owner, pr.Repo, pr.Number)
-                             ?? await _analysis.AnalyzeAsync(pr);
+                var cached = await _cache.GetAnalysisAsync<AnalysisResult>(pr.Owner, pr.Repo, pr.Number);
+                activity?.SetTag("cache.hit", cached is not null);
+
+                var result = cached ?? await _analysis.AnalyzeAsync(pr);
 
                 await _cache.SetAnalysisAsync(pr.Owner, pr.Repo, pr.Number, result);
                 await SetStatusAsync(cmd.JobId, "completed", pr.Number, result: result);
                 await _queue.AcknowledgeAsync(msgId);
+
+                activity?.SetTag("job.status",          "completed");
+                activity?.SetTag("analysis.alignment",  result.ClaimedVsActual.AlignmentAssessment);
 
                 if (!string.IsNullOrEmpty(cmd.WebhookUrl))
                     await _webhook.SendAsync(cmd.WebhookUrl, new PullRequestAnalyzedEvent(
@@ -91,6 +103,8 @@ public sealed class RedisBackgroundWorker : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[Job {JobId}] Failed", cmd.JobId);
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.SetTag("job.status", "failed");
 
                 await SetStatusAsync(cmd.JobId, "failed", pr.Number, error: ex.Message);
                 await _queue.MoveToDeadLetterAsync(msgId, ex.Message);

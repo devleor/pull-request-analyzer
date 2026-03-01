@@ -1,4 +1,7 @@
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using StackExchange.Redis;
+using PullRequestAnalyzer;
 using PullRequestAnalyzer.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -7,6 +10,19 @@ builder.Configuration
     .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
     .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true)
     .AddEnvironmentVariables();
+
+var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+    ?? builder.Configuration["OpenTelemetry:OtlpEndpoint"]
+    ?? "http://localhost:4317";
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r
+        .AddService(Telemetry.ServiceName, serviceVersion: Telemetry.ServiceVersion))
+    .WithTracing(t => t
+        .AddSource(Telemetry.ServiceName)
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -25,9 +41,6 @@ builder.Services.AddHttpClient("openrouter", c =>
 builder.Services.AddHttpClient("webhook", c =>
     c.Timeout = TimeSpan.FromSeconds(30));
 
-builder.Services.AddHttpClient("langfuse", c =>
-    c.Timeout = TimeSpan.FromSeconds(10));
-
 var redisConn = Environment.GetEnvironmentVariable("REDIS_URL")
     ?? builder.Configuration["Redis:ConnectionString"]
     ?? "localhost:6379";
@@ -39,7 +52,6 @@ builder.Services.AddSingleton<RedisCacheService>();
 builder.Services.AddSingleton<RedisJobQueue>();
 builder.Services.AddSingleton<RedLockService>();
 builder.Services.AddSingleton<DiffChunkingService>();
-builder.Services.AddSingleton<LangfuseService>();
 
 builder.Services.AddScoped<IGitHubService, GitHubIngestService>();
 builder.Services.AddScoped<IAnalysisService, LLMAnalysisService>();
@@ -73,15 +85,15 @@ app.MapGet("/health", async (IConnectionMultiplexer mux) =>
 app.MapGet("/info", () => Results.Ok(new
 {
     name    = "Pull Request Analyzer",
-    version = "4.0.0",
+    version = "5.0.0",
     stack   = new
     {
-        cache   = "Redis (StackExchange.Redis)",
-        queue   = "Redis Streams",
-        locking = "RedLock.net",
-        worker  = "IHostedService (RedisBackgroundWorker)",
-        llm        = "OpenRouter BYOK",
-        observability = "Langfuse (self-hosted)"
+        cache         = "Redis (StackExchange.Redis)",
+        queue         = "Redis Streams",
+        locking       = "RedLock.net",
+        worker        = "IHostedService (RedisBackgroundWorker)",
+        llm           = "OpenRouter BYOK",
+        observability = "Arize Phoenix + OpenTelemetry"
     }
 })).WithName("Info").WithOpenApi();
 

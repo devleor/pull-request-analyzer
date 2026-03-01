@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -70,23 +71,20 @@ public sealed class LLMAnalysisService : IAnalysisService
         }
         """;
 
-    private readonly HttpClient              _http;
-    private readonly DiffChunkingService     _chunker;
-    private readonly LangfuseService         _langfuse;
-    private readonly string                  _model;
+    private readonly HttpClient                  _http;
+    private readonly DiffChunkingService         _chunker;
+    private readonly string                      _model;
     private readonly ILogger<LLMAnalysisService> _logger;
 
     public LLMAnalysisService(
         IHttpClientFactory httpFactory,
         DiffChunkingService chunker,
-        LangfuseService langfuse,
         IConfiguration config,
         ILogger<LLMAnalysisService> logger)
     {
-        _chunker  = chunker;
-        _langfuse = langfuse;
-        _logger   = logger;
-        _model    = config["OpenRouter:Model"] ?? "anthropic/claude-3.5-sonnet";
+        _chunker = chunker;
+        _logger  = logger;
+        _model   = config["OpenRouter:Model"] ?? "anthropic/claude-3.5-sonnet";
 
         var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")
                      ?? config["OpenRouter:ApiKey"]
@@ -99,45 +97,37 @@ public sealed class LLMAnalysisService : IAnalysisService
 
     public async Task<AnalysisResult> AnalyzeAsync(PullRequestData pr)
     {
+        using var activity = Telemetry.Source.StartActivity("llm.analyze", ActivityKind.Client);
+        activity?.SetTag("pr.owner",         pr.Owner);
+        activity?.SetTag("pr.repo",          pr.Repo);
+        activity?.SetTag("pr.number",        pr.Number);
+        activity?.SetTag("pr.title",         pr.Title);
+        activity?.SetTag("llm.model",        _model);
+        activity?.SetTag("pr.changed_files", pr.ChangedFiles.Count);
+        activity?.SetTag("pr.commits",       pr.Commits.Count);
+
         _logger.LogInformation("Starting LLM analysis for PR {Id}", pr.ToIdentifier());
 
-        var traceId   = Guid.NewGuid().ToString();
         var userPrompt = BuildUserPrompt(pr);
         var messages   = BuildMessages(userPrompt);
 
-        var startedAt = DateTime.UtcNow;
-        var rawResponse = await CallApiAsync(messages);
-        var latencyMs   = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds;
+        var rawResponse = await CallApiAsync(messages, activity);
+        var result      = ParseResponse(rawResponse, pr);
 
-        var result = ParseResponse(rawResponse, pr);
+        activity?.SetTag("analysis.alignment",    result.ClaimedVsActual.AlignmentAssessment);
+        activity?.SetTag("analysis.change_units", result.ChangeUnits.Count);
+        activity?.SetTag("analysis.confidence",   result.ConfidenceScore);
 
-        await _langfuse.TraceAsync(new LangfuseTrace(
-            TraceId:    traceId,
-            Name:       $"analyze-pr-{pr.Owner}/{pr.Repo}#{pr.Number}",
-            Input:      userPrompt,
-            Output:     rawResponse,
-            Model:      _model,
-            LatencyMs:  latencyMs,
-            Metadata:   new Dictionary<string, object>
-            {
-                ["pr_number"]      = pr.Number,
-                ["pr_title"]       = pr.Title,
-                ["changed_files"]  = pr.ChangedFiles.Count,
-                ["commits"]        = pr.Commits.Count,
-                ["alignment"]      = result.ClaimedVsActual.AlignmentAssessment
-            }
-        ));
-
-        _logger.LogInformation("LLM analysis completed for PR {Id} in {LatencyMs}ms", pr.ToIdentifier(), latencyMs);
+        _logger.LogInformation("LLM analysis completed for PR {Id}", pr.ToIdentifier());
         return result;
     }
 
     private static object[] BuildMessages(string userPrompt) =>
     [
-        new { role = "system", content = SystemPrompt },
-        new { role = "user",   content = FewShotExample },
+        new { role = "system",    content = SystemPrompt },
+        new { role = "user",      content = FewShotExample },
         new { role = "assistant", content = "Understood. I will follow this format and ground my analysis in the actual diffs." },
-        new { role = "user",   content = userPrompt }
+        new { role = "user",      content = userPrompt }
     ];
 
     private string BuildUserPrompt(PullRequestData pr)
@@ -172,8 +162,12 @@ public sealed class LLMAnalysisService : IAnalysisService
         return sb.ToString();
     }
 
-    private async Task<string> CallApiAsync(object[] messages)
+    private async Task<string> CallApiAsync(object[] messages, Activity? activity)
     {
+        using var span = Telemetry.Source.StartActivity("llm.http_call", ActivityKind.Client);
+        span?.SetTag("llm.model",    _model);
+        span?.SetTag("http.url",     OpenRouterUrl);
+
         var body = JsonSerializer.Serialize(new
         {
             model       = _model,
@@ -188,7 +182,17 @@ public sealed class LLMAnalysisService : IAnalysisService
         response.EnsureSuccessStatusCode();
 
         var json    = await response.Content.ReadAsStringAsync();
-        var content = JsonNode.Parse(json)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+        var node    = JsonNode.Parse(json);
+        var content = node?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+
+        var promptTokens     = node?["usage"]?["prompt_tokens"]?.GetValue<int>() ?? 0;
+        var completionTokens = node?["usage"]?["completion_tokens"]?.GetValue<int>() ?? 0;
+
+        span?.SetTag("llm.prompt_tokens",     promptTokens);
+        span?.SetTag("llm.completion_tokens", completionTokens);
+        span?.SetTag("llm.total_tokens",      promptTokens + completionTokens);
+        activity?.SetTag("llm.prompt_tokens",     promptTokens);
+        activity?.SetTag("llm.completion_tokens", completionTokens);
 
         return content ?? throw new InvalidOperationException("Empty response from OpenRouter");
     }

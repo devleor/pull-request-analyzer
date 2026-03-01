@@ -62,7 +62,7 @@ docker-rebuild: docker-down docker-up ## Restart Docker services
 
 .PHONY: dev start stop restart watch run
 
-dev: ## Start everything: Docker (Redis + Langfuse) then API
+dev: ## Start everything: Docker (Redis + Phoenix) then API
 	@echo "$(BLUE)Starting Pull Request Analyzer...$(NC)"
 	@echo ""
 	@echo "$(YELLOW)► Starting Docker services...$(NC)"
@@ -73,9 +73,9 @@ dev: ## Start everything: Docker (Redis + Langfuse) then API
 		printf "."; sleep 1; \
 	done
 	@echo " $(GREEN)ready$(NC)"
-	@echo "$(YELLOW)► Waiting for Langfuse...$(NC)"
-	@until docker-compose -f $(COMPOSE) exec -T langfuse wget -qO- http://localhost:3000/api/public/health 2>/dev/null | grep -q ok; do \
-		printf "."; sleep 3; \
+	@echo "$(YELLOW)► Waiting for Phoenix...$(NC)"
+	@until docker-compose -f $(COMPOSE) exec -T phoenix wget -qO- http://localhost:6006/healthz 2>/dev/null | grep -q ok; do \
+		printf "."; sleep 2; \
 	done
 	@echo " $(GREEN)ready$(NC)"
 	@echo "$(YELLOW)► Building project...$(NC)"
@@ -83,7 +83,8 @@ dev: ## Start everything: Docker (Redis + Langfuse) then API
 	@echo ""
 	@echo "$(GREEN)  Redis              → localhost:6379$(NC)"
 	@echo "$(GREEN)  Redis Commander    → http://localhost:8081$(NC)"
-	@echo "$(GREEN)  Langfuse UI        → http://localhost:3000$(NC)"
+	@echo "$(GREEN)  Phoenix UI         → http://localhost:6006$(NC)"
+	@echo "$(GREEN)  OTLP gRPC          → localhost:4317$(NC)"
 	@echo "$(GREEN)  API + Swagger      → http://localhost:5000/swagger$(NC)"
 	@echo "$(GREEN)  Health             → http://localhost:5000/health$(NC)"
 	@echo ""
@@ -133,11 +134,12 @@ info: ## Show project info
 	@echo "$(BLUE).NET:$(NC)    $$($(DOTNET) --version)"
 	@echo ""
 	@echo "$(BLUE)Services:$(NC)"
-	@echo "  Redis           localhost:6379"
+	@echo "  Redis           localhost:6379
 	@echo "  Redis UI        http://localhost:8081"
-	@echo "  Langfuse UI     http://localhost:3000"
+	@echo "  Phoenix UI      http://localhost:6006"
+	@echo "  OTLP gRPC       localhost:4317"
 	@echo "  API             http://localhost:5000"
-	@echo "  Swagger         http://localhost:5000/swagger"
+	@echo "  Swagger         http://localhost:5000/swagger""
 
 status: docker-ps ## Show Docker container status
 
