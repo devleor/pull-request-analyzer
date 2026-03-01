@@ -1,92 +1,90 @@
 using MassTransit;
+using PullRequestAnalyzer.Controllers;
 using PullRequestAnalyzer.Messages;
 using PullRequestAnalyzer.Services;
 
-namespace PullRequestAnalyzer.Consumers
+namespace PullRequestAnalyzer.Consumers;
+
+public sealed class AnalyzePullRequestConsumer : IConsumer<AnalyzePullRequestCommand>
 {
-    /// <summary>
-    /// MassTransit consumer that processes pull request analysis commands.
-    /// </summary>
-    public class AnalyzePullRequestConsumer : IConsumer<AnalyzePullRequestCommand>
+    private readonly IAnalysisService  _analysis;
+    private readonly RedisCacheService _cache;
+    private readonly WebhookService    _webhook;
+    private readonly IPublishEndpoint  _bus;
+    private readonly ILogger<AnalyzePullRequestConsumer> _logger;
+
+    public AnalyzePullRequestConsumer(
+        IAnalysisService analysis,
+        RedisCacheService cache,
+        WebhookService webhook,
+        IPublishEndpoint bus,
+        ILogger<AnalyzePullRequestConsumer> logger)
     {
-        private readonly LLMAnalysisService _analysisService;
-        private readonly ILogger<AnalyzePullRequestConsumer> _logger;
-        private readonly IPublishEndpoint _publishEndpoint;
-        private readonly JobStatusService _jobStatusService;
-        private readonly WebhookService _webhookService;
+        _analysis = analysis;
+        _cache    = cache;
+        _webhook  = webhook;
+        _bus      = bus;
+        _logger   = logger;
+    }
 
-        public AnalyzePullRequestConsumer(
-            LLMAnalysisService analysisService,
-            ILogger<AnalyzePullRequestConsumer> logger,
-            IPublishEndpoint publishEndpoint,
-            JobStatusService jobStatusService,
-            WebhookService webhookService)
+    public async Task Consume(ConsumeContext<AnalyzePullRequestCommand> context)
+    {
+        var cmd = context.Message;
+        var pr  = cmd.PullRequestData;
+
+        _logger.LogInformation("[Job {JobId}] Processing PR {Id}", cmd.JobId, pr.ToIdentifier());
+
+        await UpdateJobAsync(cmd.JobId, "processing", pr.Number);
+
+        try
         {
-            _analysisService = analysisService;
-            _logger = logger;
-            _publishEndpoint = publishEndpoint;
-            _jobStatusService = jobStatusService;
-            _webhookService = webhookService;
-        }
+            var result = await _analysis.AnalyzeAsync(pr);
 
-        public async Task Consume(ConsumeContext<AnalyzePullRequestCommand> context)
+            await UpdateJobAsync(cmd.JobId, "completed", pr.Number, result: result);
+            await _cache.SetAnalysisAsync(pr.Owner, pr.Repo, pr.Number, result);
+
+            var ev = new PullRequestAnalyzedEvent(cmd.JobId, pr.Number, result);
+            await _bus.Publish(ev);
+
+            if (!string.IsNullOrEmpty(cmd.WebhookUrl))
+                await _webhook.SendAsync(cmd.WebhookUrl, ev);
+
+            _logger.LogInformation("[Job {JobId}] Completed", cmd.JobId);
+        }
+        catch (Exception ex)
         {
-            var command = context.Message;
-            _logger.LogInformation($"[Job {command.JobId}] Starting analysis for PR #{command.PullRequestData.Number}");
+            _logger.LogError(ex, "[Job {JobId}] Failed", cmd.JobId);
 
-            try
-            {
-                // Update job status to "processing"
-                await _jobStatusService.UpdateJobStatusAsync(command.JobId, "processing");
+            await UpdateJobAsync(cmd.JobId, "failed", pr.Number, error: ex.Message);
 
-                // Perform the analysis
-                var analysisResult = await _analysisService.AnalyzePullRequestAsync(command.PullRequestData);
+            var ev = new PullRequestAnalysisFailedEvent(cmd.JobId, pr.Number, ex.Message);
+            await _bus.Publish(ev);
 
-                // Update job status to "completed"
-                await _jobStatusService.UpdateJobStatusAsync(command.JobId, "completed", analysisResult);
+            if (!string.IsNullOrEmpty(cmd.WebhookUrl))
+                await _webhook.SendAsync(cmd.WebhookUrl, ev);
 
-                // Publish success event
-                var successEvent = new PullRequestAnalyzedEvent
-                {
-                    JobId = command.JobId,
-                    PrNumber = command.PullRequestData.Number,
-                    AnalysisResult = analysisResult
-                };
-
-                await _publishEndpoint.Publish(successEvent);
-                _logger.LogInformation($"[Job {command.JobId}] Analysis completed successfully");
-
-                // Send webhook notification if provided
-                if (!string.IsNullOrEmpty(command.WebhookUrl))
-                {
-                    await _webhookService.SendWebhookAsync(command.WebhookUrl, successEvent);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"[Job {command.JobId}] Analysis failed");
-
-                // Update job status to "failed"
-                await _jobStatusService.UpdateJobStatusAsync(command.JobId, "failed", errorMessage: ex.Message);
-
-                // Publish failure event
-                var failureEvent = new PullRequestAnalysisFailedEvent
-                {
-                    JobId = command.JobId,
-                    PrNumber = command.PullRequestData.Number,
-                    ErrorMessage = ex.Message
-                };
-
-                await _publishEndpoint.Publish(failureEvent);
-
-                // Send webhook notification if provided
-                if (!string.IsNullOrEmpty(command.WebhookUrl))
-                {
-                    await _webhookService.SendWebhookAsync(command.WebhookUrl, failureEvent);
-                }
-
-                throw;
-            }
+            throw;
         }
+    }
+
+    private async Task UpdateJobAsync(
+        string jobId, string status, int prNumber,
+        PullRequestAnalyzer.Models.AnalysisResult? result = null,
+        string? error = null)
+    {
+        var existing = await _cache.GetJobAsync<JobStatusRecord>(jobId);
+
+        var updated = existing is null
+            ? new JobStatusRecord(jobId, status, DateTime.UtcNow, null, null, prNumber, result, error)
+            : existing with
+            {
+                Status         = status,
+                StartedAt      = status == "processing" ? (existing.StartedAt ?? DateTime.UtcNow) : existing.StartedAt,
+                CompletedAt    = status is "completed" or "failed" ? DateTime.UtcNow : existing.CompletedAt,
+                AnalysisResult = result ?? existing.AnalysisResult,
+                ErrorMessage   = error  ?? existing.ErrorMessage
+            };
+
+        await _cache.SetJobAsync(jobId, updated);
     }
 }

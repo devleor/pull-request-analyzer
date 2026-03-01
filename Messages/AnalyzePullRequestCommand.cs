@@ -1,40 +1,34 @@
 using PullRequestAnalyzer.Models;
 
-namespace PullRequestAnalyzer.Messages
+namespace PullRequestAnalyzer.Messages;
+
+public sealed class AnalyzePullRequestCommand
 {
-    /// <summary>
-    /// Command to analyze a pull request asynchronously via MassTransit.
-    /// </summary>
-    public class AnalyzePullRequestCommand
-    {
-        public string JobId { get; set; } = Guid.NewGuid().ToString();
-        public PullRequestData PullRequestData { get; set; }
-        public string? WebhookUrl { get; set; }
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public string          JobId           { get; init; } = Guid.NewGuid().ToString();
+    public PullRequestData PullRequestData { get; init; } = null!;
+    public string?         WebhookUrl      { get; init; }
+    public DateTime        CreatedAt       { get; init; } = DateTime.UtcNow;
+    public string?         StreamMessageId { get; set; }
+}
 
-        /// <summary>Redis Streams message ID — set by RedisJobQueue after dequeue.</summary>
-        public string? StreamMessageId { get; set; }
-    }
+public sealed record PullRequestAnalyzedEvent(
+    string         JobId,
+    int            PrNumber,
+    AnalysisResult AnalysisResult,
+    DateTime       CompletedAt
+)
+{
+    public PullRequestAnalyzedEvent(string jobId, int prNumber, AnalysisResult result)
+        : this(jobId, prNumber, result, DateTime.UtcNow) { }
+}
 
-    /// <summary>
-    /// Event published when analysis is completed successfully.
-    /// </summary>
-    public class PullRequestAnalyzedEvent
-    {
-        public string JobId { get; set; }
-        public int PrNumber { get; set; }
-        public AnalysisResult AnalysisResult { get; set; }
-        public DateTime CompletedAt { get; set; } = DateTime.UtcNow;
-    }
-
-    /// <summary>
-    /// Event published when analysis fails.
-    /// </summary>
-    public class PullRequestAnalysisFailedEvent
-    {
-        public string JobId { get; set; }
-        public int PrNumber { get; set; }
-        public string ErrorMessage { get; set; }
-        public DateTime FailedAt { get; set; } = DateTime.UtcNow;
-    }
+public sealed record PullRequestAnalysisFailedEvent(
+    string   JobId,
+    int      PrNumber,
+    string   ErrorMessage,
+    DateTime FailedAt
+)
+{
+    public PullRequestAnalysisFailedEvent(string jobId, int prNumber, string error)
+        : this(jobId, prNumber, error, DateTime.UtcNow) { }
 }

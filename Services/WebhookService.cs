@@ -1,45 +1,33 @@
-using Newtonsoft.Json;
+using System.Text;
+using System.Text.Json;
 
-namespace PullRequestAnalyzer.Services
+namespace PullRequestAnalyzer.Services;
+
+public sealed class WebhookService
 {
-    /// <summary>
-    /// Service to send webhook notifications when analysis is completed.
-    /// </summary>
-    public class WebhookService
+    private readonly HttpClient _http;
+    private readonly ILogger<WebhookService> _logger;
+
+    public WebhookService(IHttpClientFactory httpFactory, ILogger<WebhookService> logger)
     {
-        private readonly HttpClient _httpClient;
-        private readonly ILogger<WebhookService> _logger;
+        _http   = httpFactory.CreateClient("webhook");
+        _logger = logger;
+    }
 
-        public WebhookService(ILogger<WebhookService> logger)
+    public async Task SendAsync(string url, object payload)
+    {
+        try
         {
-            _logger = logger;
-            _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var json     = JsonSerializer.Serialize(payload);
+            var content  = new StringContent(json, Encoding.UTF8, "application/json");
+            var response = await _http.PostAsync(url, content);
+
+            if (!response.IsSuccessStatusCode)
+                _logger.LogWarning("Webhook to {Url} returned {Status}", url, response.StatusCode);
         }
-
-        public async Task SendWebhookAsync(string webhookUrl, object payload)
+        catch (Exception ex)
         {
-            try
-            {
-                _logger.LogInformation($"Sending webhook to {webhookUrl}");
-
-                var json = JsonConvert.SerializeObject(payload);
-                var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
-
-                var response = await _httpClient.PostAsync(webhookUrl, content);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    _logger.LogInformation($"Webhook sent successfully to {webhookUrl}");
-                }
-                else
-                {
-                    _logger.LogWarning($"Webhook failed with status {response.StatusCode} to {webhookUrl}");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"Error sending webhook to {webhookUrl}");
-            }
+            _logger.LogError(ex, "Failed to send webhook to {Url}", url);
         }
     }
 }
