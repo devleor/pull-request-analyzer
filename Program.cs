@@ -25,6 +25,9 @@ builder.Services.AddHttpClient("openrouter", c =>
 builder.Services.AddHttpClient("webhook", c =>
     c.Timeout = TimeSpan.FromSeconds(30));
 
+builder.Services.AddHttpClient("langfuse", c =>
+    c.Timeout = TimeSpan.FromSeconds(10));
+
 var redisConn = Environment.GetEnvironmentVariable("REDIS_URL")
     ?? builder.Configuration["Redis:ConnectionString"]
     ?? "localhost:6379";
@@ -36,6 +39,7 @@ builder.Services.AddSingleton<RedisCacheService>();
 builder.Services.AddSingleton<RedisJobQueue>();
 builder.Services.AddSingleton<RedLockService>();
 builder.Services.AddSingleton<DiffChunkingService>();
+builder.Services.AddSingleton<LangfuseService>();
 
 builder.Services.AddScoped<IGitHubService, GitHubIngestService>();
 builder.Services.AddScoped<IAnalysisService, LLMAnalysisService>();
@@ -76,7 +80,8 @@ app.MapGet("/info", () => Results.Ok(new
         queue   = "Redis Streams",
         locking = "RedLock.net",
         worker  = "IHostedService (RedisBackgroundWorker)",
-        llm     = "OpenRouter BYOK"
+        llm        = "OpenRouter BYOK",
+        observability = "Langfuse (self-hosted)"
     }
 })).WithName("Info").WithOpenApi();
 
