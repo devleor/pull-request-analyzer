@@ -73,19 +73,11 @@ dev: ## Start everything: Docker (Redis + RabbitMQ) then API
 		printf "."; sleep 1; \
 	done
 	@echo " $(GREEN)ready$(NC)"
-	@echo "$(YELLOW)► Waiting for RabbitMQ...$(NC)"
-	@until docker-compose -f $(COMPOSE) exec -T rabbitmq rabbitmq-diagnostics -q ping 2>/dev/null; do \
-		printf "."; sleep 2; \
-	done
-	@echo " $(GREEN)ready$(NC)"
-	@echo ""
 	@echo "$(YELLOW)► Building project...$(NC)"
 	@$(DOTNET) build --configuration Release --no-restore -v q
 	@echo ""
 	@echo "$(GREEN)  Redis              → localhost:6379$(NC)"
 	@echo "$(GREEN)  Redis Commander    → http://localhost:8081$(NC)"
-	@echo "$(GREEN)  RabbitMQ           → localhost:5672$(NC)"
-	@echo "$(GREEN)  RabbitMQ UI        → http://localhost:15672  (guest/guest)$(NC)"
 	@echo "$(GREEN)  API + Swagger      → http://localhost:5000/swagger$(NC)"
 	@echo "$(GREEN)  Health             → http://localhost:5000/health$(NC)"
 	@echo ""
@@ -137,8 +129,6 @@ info: ## Show project info
 	@echo "$(BLUE)Services:$(NC)"
 	@echo "  Redis           localhost:6379"
 	@echo "  Redis UI        http://localhost:8081"
-	@echo "  RabbitMQ        localhost:5672"
-	@echo "  RabbitMQ UI     http://localhost:15672"
 	@echo "  API             http://localhost:5000"
 	@echo "  Swagger         http://localhost:5000/swagger"
 

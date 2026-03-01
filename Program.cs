@@ -1,6 +1,4 @@
-using MassTransit;
 using StackExchange.Redis;
-using PullRequestAnalyzer.Consumers;
 using PullRequestAnalyzer.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -45,25 +43,6 @@ builder.Services.AddScoped<WebhookService>();
 
 builder.Services.AddHostedService<RedisBackgroundWorker>();
 
-var rabbitHost = builder.Configuration["RabbitMQ:Host"]     ?? "localhost";
-var rabbitPort = int.Parse(builder.Configuration["RabbitMQ:Port"] ?? "5672");
-var rabbitUser = builder.Configuration["RabbitMQ:Username"] ?? "guest";
-var rabbitPass = builder.Configuration["RabbitMQ:Password"] ?? "guest";
-
-builder.Services.AddMassTransit(x =>
-{
-    x.AddConsumer<AnalyzePullRequestConsumer>();
-    x.UsingRabbitMq((ctx, cfg) =>
-    {
-        cfg.Host($"rabbitmq://{rabbitHost}:{rabbitPort}", h =>
-        {
-            h.Username(rabbitUser);
-            h.Password(rabbitPass);
-        });
-        cfg.ConfigureEndpoints(ctx);
-    });
-});
-
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
@@ -90,8 +69,15 @@ app.MapGet("/health", async (IConnectionMultiplexer mux) =>
 app.MapGet("/info", () => Results.Ok(new
 {
     name    = "Pull Request Analyzer",
-    version = "3.0.0",
-    stack   = new { cache = "Redis", queue = "Redis Streams", lock_ = "RedLock", broker = "RabbitMQ+MassTransit", llm = "OpenRouter BYOK" }
+    version = "4.0.0",
+    stack   = new
+    {
+        cache   = "Redis (StackExchange.Redis)",
+        queue   = "Redis Streams",
+        locking = "RedLock.net",
+        worker  = "IHostedService (RedisBackgroundWorker)",
+        llm     = "OpenRouter BYOK"
+    }
 })).WithName("Info").WithOpenApi();
 
 app.Run();

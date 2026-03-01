@@ -15,20 +15,10 @@ public sealed record PullRequestAnalyzedEvent(
     string         JobId,
     int            PrNumber,
     AnalysisResult AnalysisResult,
-    DateTime       CompletedAt
-)
-{
-    public PullRequestAnalyzedEvent(string jobId, int prNumber, AnalysisResult result)
-        : this(jobId, prNumber, result, DateTime.UtcNow) { }
-}
+    DateTime       CompletedAt);
 
 public sealed record PullRequestAnalysisFailedEvent(
     string   JobId,
     int      PrNumber,
     string   ErrorMessage,
-    DateTime FailedAt
-)
-{
-    public PullRequestAnalysisFailedEvent(string jobId, int prNumber, string error)
-        : this(jobId, prNumber, error, DateTime.UtcNow) { }
-}
+    DateTime FailedAt);

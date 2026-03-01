@@ -1,17 +1,19 @@
 using PullRequestAnalyzer.Controllers;
+using PullRequestAnalyzer.Messages;
 using PullRequestAnalyzer.Models;
 
 namespace PullRequestAnalyzer.Services;
 
 public sealed class RedisBackgroundWorker : BackgroundService
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan PollInterval  = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ErrorCooldown = TimeSpan.FromSeconds(5);
 
-    private readonly RedisJobQueue   _queue;
-    private readonly RedLockService  _lock;
+    private readonly RedisJobQueue    _queue;
+    private readonly RedLockService   _lock;
     private readonly IAnalysisService _analysis;
     private readonly RedisCacheService _cache;
-    private readonly WebhookService  _webhook;
+    private readonly WebhookService   _webhook;
     private readonly ILogger<RedisBackgroundWorker> _logger;
 
     public RedisBackgroundWorker(
@@ -32,86 +34,81 @@ public sealed class RedisBackgroundWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("Redis background worker started");
+        _logger.LogInformation("Worker started");
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var commands = await _queue.DequeueAsync(stoppingToken);
+                var commands = (await _queue.DequeueAsync(stoppingToken)).ToList();
 
                 foreach (var cmd in commands)
                 {
                     if (stoppingToken.IsCancellationRequested) break;
-                    await ProcessAsync(cmd);
+                    await ProcessAsync(cmd, stoppingToken);
                 }
 
-                if (!commands.Any())
+                if (commands.Count == 0)
                     await Task.Delay(PollInterval, stoppingToken);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unhandled error in worker poll loop");
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                await Task.Delay(ErrorCooldown, stoppingToken);
             }
         }
 
-        _logger.LogInformation("Redis background worker stopped");
+        _logger.LogInformation("Worker stopped");
     }
 
-    private async Task ProcessAsync(Messages.AnalyzePullRequestCommand cmd)
+    private async Task ProcessAsync(AnalyzePullRequestCommand cmd, CancellationToken ct)
     {
         var pr    = cmd.PullRequestData;
         var msgId = cmd.StreamMessageId ?? string.Empty;
 
-        _logger.LogInformation("[Job {JobId}] Processing PR {Id}", cmd.JobId, pr.ToIdentifier());
+        _logger.LogInformation("[Job {JobId}] Starting PR {Id}", cmd.JobId, pr.ToIdentifier());
 
-        await SetJobStatusAsync(cmd.JobId, "processing", pr.Number);
+        await SetStatusAsync(cmd.JobId, "processing", pr.Number);
 
         var processed = await _lock.ExecuteWithLockAsync(pr.Owner, pr.Repo, pr.Number, async () =>
         {
             try
             {
-                var cached = await _cache.GetAnalysisAsync<AnalysisResult>(pr.Owner, pr.Repo, pr.Number);
-
-                if (cached is not null)
-                {
-                    await SetJobStatusAsync(cmd.JobId, "completed", pr.Number, result: cached);
-                    await _queue.AcknowledgeAsync(msgId);
-                    return;
-                }
-
-                var result = await _analysis.AnalyzeAsync(pr);
+                var result = await _cache.GetAnalysisAsync<AnalysisResult>(pr.Owner, pr.Repo, pr.Number)
+                             ?? await _analysis.AnalyzeAsync(pr);
 
                 await _cache.SetAnalysisAsync(pr.Owner, pr.Repo, pr.Number, result);
-                await SetJobStatusAsync(cmd.JobId, "completed", pr.Number, result: result);
+                await SetStatusAsync(cmd.JobId, "completed", pr.Number, result: result);
+                await _queue.AcknowledgeAsync(msgId);
 
                 if (!string.IsNullOrEmpty(cmd.WebhookUrl))
-                    await _webhook.SendAsync(cmd.WebhookUrl, result);
-
-                await _queue.AcknowledgeAsync(msgId);
+                    await _webhook.SendAsync(cmd.WebhookUrl, new PullRequestAnalyzedEvent(
+                        cmd.JobId, pr.Number, result, DateTime.UtcNow));
 
                 _logger.LogInformation("[Job {JobId}] Completed", cmd.JobId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[Job {JobId}] Failed", cmd.JobId);
-                await SetJobStatusAsync(cmd.JobId, "failed", pr.Number, error: ex.Message);
+
+                await SetStatusAsync(cmd.JobId, "failed", pr.Number, error: ex.Message);
                 await _queue.MoveToDeadLetterAsync(msgId, ex.Message);
 
                 if (!string.IsNullOrEmpty(cmd.WebhookUrl))
-                    await _webhook.SendAsync(cmd.WebhookUrl, new { job_id = cmd.JobId, status = "failed", error = ex.Message });
+                    await _webhook.SendAsync(cmd.WebhookUrl, new PullRequestAnalysisFailedEvent(
+                        cmd.JobId, pr.Number, ex.Message, DateTime.UtcNow));
             }
         });
 
         if (!processed)
-            _logger.LogWarning("[Job {JobId}] Lock not acquired for PR {Id} — will retry", cmd.JobId, pr.ToIdentifier());
+            _logger.LogWarning("[Job {JobId}] Lock not acquired for {Id} — will retry", cmd.JobId, pr.ToIdentifier());
     }
 
-    private async Task SetJobStatusAsync(
+    private async Task SetStatusAsync(
         string jobId, string status, int prNumber,
-        AnalysisResult? result = null, string? error = null)
+        AnalysisResult? result = null,
+        string? error = null)
     {
         var existing = await _cache.GetJobAsync<JobStatusRecord>(jobId);
 
