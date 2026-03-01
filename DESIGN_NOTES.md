@@ -85,7 +85,7 @@ Large PRs (like the MindsDB example commit with 29 files) present a context wind
 
 ## 5. Known Limitations
 
-- The `example_pr_data.json` is a mock, not a real MindsDB PR. Use `scripts/generate_pr_json.py` to generate a real one.
+- The `example_pr_data.json` is a mock, not a real MindsDB PR. Use `GET /api/pull-requests/mindsdb/mindsdb/:number` with a valid `GITHUB_TOKEN` to fetch and save a real one.
 - Diff truncation at 2,000 characters per file may miss important context in large files.
 - No retry with exponential backoff on LLM API failures (the DLQ captures failed jobs, but no automatic retry is implemented).
 - `RedisCacheService.GetAllJobIdsAsync()` uses a Redis `KEYS` scan, which is not suitable for production at scale. A Redis Set should track job IDs instead.

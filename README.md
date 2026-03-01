@@ -46,8 +46,6 @@ PullRequestAnalyzer/
 │   └── Result.cs                  # Result<T> error pattern
 ├── Messages/
 │   └── AnalyzePullRequestCommand.cs
-├── scripts/
-│   └── generate_pr_json.py        # Script to generate real PR JSON from GitHub API
 ├── docs/
 │   ├── flow.mmd                   # Mermaid diagram source
 │   └── flow.png                   # Rendered architecture diagram
@@ -108,16 +106,13 @@ After `make dev`, the following services are available:
 
 ## Generating a Real PR JSON from MindsDB
 
-Use the provided Python script to generate a normalized PR JSON from any GitHub pull request:
+The API itself is the source of truth. Once the API is running with a valid `GITHUB_TOKEN`, fetch and save any real PR directly:
 
 ```bash
-export GITHUB_TOKEN=your_token_here
-python3 scripts/generate_pr_json.py mindsdb mindsdb 9876
+curl http://localhost:5000/api/pull-requests/mindsdb/mindsdb/9876 > pr_mindsdb_9876.json
 ```
 
-This produces a file `pr_mindsdb_mindsdb_9876.json` in the current directory. The script uses only the Python standard library — no dependencies to install.
-
-The `example_pr_data.json` in the repository is a realistic mock of a MindsDB PR. Replace it with a real one using the script above.
+The `example_pr_data.json` in the repository is a realistic mock of a MindsDB PR, useful for testing without API credentials.
 
 ## API Endpoints
 
