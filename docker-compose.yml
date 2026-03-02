@@ -47,6 +47,34 @@ services:
       retries: 12
       start_period: 15s
 
+  api:
+    build: .
+    container_name: pr-analyzer-api
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:5000
+      REDIS_URL: redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://phoenix:4317
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      phoenix:
+        condition: service_started
+    volumes:
+      - ./appsettings.json:/app/appsettings.json:ro
+      - ./appsettings.Development.json:/app/appsettings.Development.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
 volumes:
   redis_data:
   phoenix_data:

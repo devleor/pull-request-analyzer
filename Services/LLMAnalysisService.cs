@@ -16,17 +16,30 @@ public sealed class LLMAnalysisService : IAnalysisService
         You are an expert engineering analyst specializing in code review and pull request analysis.
         Your role is to analyze GitHub pull requests by examining the actual code diffs — not just the PR description.
 
-        Your analysis must be grounded in evidence from the diffs. When you make a claim, it must be traceable
-        to a specific file or code change. Do not infer intent from the PR title alone.
+        CRITICAL RULES TO PREVENT HALLUCINATION:
+        1. ONLY reference files that appear in the "Changed Files" section
+        2. ONLY describe changes that are visible in the actual diff patches
+        3. Quote specific line numbers and code snippets from the diffs when making claims
+        4. If a diff is truncated or missing, explicitly state this limitation
+        5. Never invent files, functions, or changes that aren't in the provided diffs
+        6. Use confidence levels: "high" (clear in diff), "medium" (partially visible), "low" (inferred)
 
-        You will think step by step before producing your final JSON output:
+        Your analysis must be grounded in evidence from the diffs. When you make a claim, it must be traceable
+        to a specific file or code change with line numbers.
+
+        Analysis process:
         1. Read the PR metadata (title, description, author).
         2. Read each commit message and note the progression of changes.
-        3. Read each changed file's diff carefully.
-        4. Identify distinct logical units of change (a "change unit" is a cohesive set of modifications with a single purpose).
+        3. Read each changed file's diff carefully, noting line numbers.
+        4. Identify distinct logical units of change based on actual diff content.
         5. Assess whether the PR description accurately reflects what the diffs show.
         6. Identify risks: missing tests, large deletions, security-sensitive files, unclear changes.
-        7. Produce the final JSON.
+        7. Produce the final JSON with specific evidence for each claim.
+
+        For each change unit, you MUST provide:
+        - The exact filename(s) from the Changed Files list
+        - Specific line numbers or code snippets from the diffs
+        - Confidence level based on diff visibility
 
         Always return valid JSON. Do not wrap it in markdown code blocks.
         """;
@@ -134,28 +147,59 @@ public sealed class LLMAnalysisService : IAnalysisService
     {
         var sb = new StringBuilder();
 
+        sb.AppendLine("=== PULL REQUEST METADATA ===");
         sb.AppendLine($"Title: {pr.Title}");
         sb.AppendLine($"Description: {(string.IsNullOrWhiteSpace(pr.Description) ? "(none)" : pr.Description)}");
         sb.AppendLine($"Author: {pr.Author}");
         sb.AppendLine($"State: {pr.State}");
+        sb.AppendLine($"Total Files Changed: {pr.ChangedFiles.Count}");
+        sb.AppendLine($"Total Commits: {pr.Commits.Count}");
         sb.AppendLine();
 
-        sb.AppendLine("Commits:");
+        sb.AppendLine("=== COMMITS (chronological order) ===");
         foreach (var c in pr.Commits)
             sb.AppendLine($"  {c.Sha[..Math.Min(7, c.Sha.Length)]}: {c.Message.Split('\n')[0]}");
 
         sb.AppendLine();
-        sb.AppendLine("Changed Files:");
+        sb.AppendLine("=== CHANGED FILES WITH DIFFS ===");
+        sb.AppendLine("IMPORTANT: Base your analysis ONLY on the diffs shown below.");
+        sb.AppendLine("If a diff is truncated, mention this limitation in your analysis.");
+        sb.AppendLine();
+
+        var fileIndex = 0;
         foreach (var f in pr.ChangedFiles)
         {
-            sb.AppendLine($"  {f.Filename} ({f.Status}) +{f.Additions}/-{f.Deletions}");
+            fileIndex++;
+            sb.AppendLine($"FILE {fileIndex}/{pr.ChangedFiles.Count}: {f.Filename}");
+            sb.AppendLine($"  Status: {f.Status}");
+            sb.AppendLine($"  Changes: +{f.Additions} lines / -{f.Deletions} lines");
+
             if (!string.IsNullOrEmpty(f.Patch))
             {
-                sb.AppendLine(_chunker.TruncatePatch(f.Patch, 2000));
-                sb.AppendLine();
+                var truncatedPatch = _chunker.TruncatePatch(f.Patch, 2000);
+                var wasTruncated = truncatedPatch.Length < f.Patch.Length;
+
+                sb.AppendLine("  Diff:");
+                sb.AppendLine(truncatedPatch);
+
+                if (wasTruncated)
+                {
+                    sb.AppendLine($"  [DIFF TRUNCATED - showing {truncatedPatch.Length} of {f.Patch.Length} characters]");
+                }
             }
+            else
+            {
+                sb.AppendLine("  [NO DIFF AVAILABLE - file may be binary or too large]");
+            }
+            sb.AppendLine();
         }
 
+        sb.AppendLine("=== ANALYSIS INSTRUCTIONS ===");
+        sb.AppendLine("1. Analyze ONLY the files and changes shown above");
+        sb.AppendLine("2. Quote specific line numbers and code from the diffs");
+        sb.AppendLine("3. Mark confidence as 'low' if diff is truncated or missing");
+        sb.AppendLine("4. Identify discrepancies between PR description and actual changes");
+        sb.AppendLine("5. Return a valid JSON response following the schema");
         sb.AppendLine();
         sb.AppendLine("Now analyze this pull request. Think step by step, then return the JSON.");
 
@@ -168,6 +212,14 @@ public sealed class LLMAnalysisService : IAnalysisService
         span?.SetTag("llm.model",    _model);
         span?.SetTag("http.url",     OpenRouterUrl);
 
+        // Log the prompt for Phoenix monitoring
+        var systemMsg = messages[0] as dynamic;
+        var userMsg = messages[messages.Length - 1] as dynamic;
+
+        span?.SetTag("llm.system_prompt", systemMsg?.content?.ToString() ?? "");
+        span?.SetTag("llm.user_prompt", userMsg?.content?.ToString() ?? "");
+        span?.SetTag("llm.messages_count", messages.Length);
+
         var body = JsonSerializer.Serialize(new
         {
             model       = _model,
@@ -176,8 +228,13 @@ public sealed class LLMAnalysisService : IAnalysisService
             max_tokens  = 4096
         });
 
+        // Track prompt size
+        span?.SetTag("llm.request_size_bytes", Encoding.UTF8.GetByteCount(body));
+
+        var stopwatch = Stopwatch.StartNew();
         var response = await _http.PostAsync(OpenRouterUrl,
             new StringContent(body, Encoding.UTF8, "application/json"));
+        stopwatch.Stop();
 
         response.EnsureSuccessStatusCode();
 
@@ -187,12 +244,27 @@ public sealed class LLMAnalysisService : IAnalysisService
 
         var promptTokens     = node?["usage"]?["prompt_tokens"]?.GetValue<int>() ?? 0;
         var completionTokens = node?["usage"]?["completion_tokens"]?.GetValue<int>() ?? 0;
+        var totalTokens      = promptTokens + completionTokens;
 
+        // Enhanced telemetry for Phoenix
         span?.SetTag("llm.prompt_tokens",     promptTokens);
         span?.SetTag("llm.completion_tokens", completionTokens);
-        span?.SetTag("llm.total_tokens",      promptTokens + completionTokens);
+        span?.SetTag("llm.total_tokens",      totalTokens);
+        span?.SetTag("llm.response_time_ms",  stopwatch.ElapsedMilliseconds);
+        span?.SetTag("llm.response_content",  content ?? "");
+        span?.SetTag("llm.response_size_bytes", Encoding.UTF8.GetByteCount(content ?? ""));
+
+        // Cost estimation (approximate)
+        var estimatedCost = (promptTokens * 0.003 + completionTokens * 0.015) / 1000; // Claude 3.5 Sonnet pricing
+        span?.SetTag("llm.estimated_cost_usd", estimatedCost);
+
         activity?.SetTag("llm.prompt_tokens",     promptTokens);
         activity?.SetTag("llm.completion_tokens", completionTokens);
+        activity?.SetTag("llm.total_tokens",      totalTokens);
+        activity?.SetTag("llm.response_time_ms",  stopwatch.ElapsedMilliseconds);
+
+        _logger.LogInformation("LLM call completed: {Tokens} tokens in {Time}ms (est. ${Cost:F4})",
+            totalTokens, stopwatch.ElapsedMilliseconds, estimatedCost);
 
         return content ?? throw new InvalidOperationException("Empty response from OpenRouter");
     }

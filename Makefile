@@ -62,11 +62,11 @@ docker-rebuild: docker-down docker-up ## Restart Docker services
 
 .PHONY: dev start stop restart watch run
 
-dev: ## Start everything: Docker (Redis + Phoenix) then API
+dev: ## Start everything in Docker (Redis + Phoenix + API with Worker)
 	@echo "$(BLUE)Starting Pull Request Analyzer...$(NC)"
 	@echo ""
-	@echo "$(YELLOW)► Starting Docker services...$(NC)"
-	@docker-compose -f $(COMPOSE) up -d
+	@echo "$(YELLOW)► Building and starting all services...$(NC)"
+	@docker-compose -f $(COMPOSE) up --build -d
 	@echo ""
 	@echo "$(YELLOW)► Waiting for Redis...$(NC)"
 	@until docker-compose -f $(COMPOSE) exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; do \
@@ -74,13 +74,17 @@ dev: ## Start everything: Docker (Redis + Phoenix) then API
 	done
 	@echo " $(GREEN)ready$(NC)"
 	@echo "$(YELLOW)► Waiting for Phoenix...$(NC)"
-	@until docker-compose -f $(COMPOSE) exec -T phoenix wget -qO- http://localhost:6006/healthz 2>/dev/null | grep -q ok; do \
+	@until curl -sf http://localhost:6006/healthz 2>/dev/null | grep -q OK; do \
 		printf "."; sleep 2; \
 	done
 	@echo " $(GREEN)ready$(NC)"
-	@echo "$(YELLOW)► Building project...$(NC)"
-	@$(DOTNET) build --configuration Release --no-restore -v q
+	@echo "$(YELLOW)► Waiting for API...$(NC)"
+	@until curl -sf http://localhost:5000/health 2>/dev/null | grep -q healthy; do \
+		printf "."; sleep 2; \
+	done
+	@echo " $(GREEN)ready$(NC)"
 	@echo ""
+	@echo "$(GREEN)✓ All services running in Docker:$(NC)"
 	@echo "$(GREEN)  Redis              → localhost:6379$(NC)"
 	@echo "$(GREEN)  Redis Commander    → http://localhost:8081$(NC)"
 	@echo "$(GREEN)  Phoenix UI         → http://localhost:6006$(NC)"
@@ -88,7 +92,8 @@ dev: ## Start everything: Docker (Redis + Phoenix) then API
 	@echo "$(GREEN)  API + Swagger      → http://localhost:5000/swagger$(NC)"
 	@echo "$(GREEN)  Health             → http://localhost:5000/health$(NC)"
 	@echo ""
-	@$(DOTNET) run --no-build
+	@echo "$(YELLOW)► Following API logs (Ctrl+C to stop)...$(NC)"
+	@docker-compose -f $(COMPOSE) logs -f api
 
 start: dev ## Alias for dev
 
@@ -96,11 +101,12 @@ stop: docker-down ## Stop everything
 
 restart: stop dev ## Restart everything
 
-run: ## Run API only (Docker must already be up)
-	@$(DOTNET) run
+run: ## View logs of running containers
+	@docker-compose -f $(COMPOSE) logs -f
 
-watch: ## Hot-reload mode (Docker must already be up)
-	@$(DOTNET) watch run
+watch: ## Rebuild and restart API container
+	@docker-compose -f $(COMPOSE) up --build -d api
+	@docker-compose -f $(COMPOSE) logs -f api
 
 # ── Quality ────────────────────────────────────────────────────────────────────
 

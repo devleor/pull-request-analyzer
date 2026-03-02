@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using PullRequestAnalyzer.Controllers;
 using PullRequestAnalyzer.Messages;
 using PullRequestAnalyzer.Models;
@@ -12,24 +13,21 @@ public sealed class RedisBackgroundWorker : BackgroundService
 
     private readonly RedisJobQueue    _queue;
     private readonly RedLockService   _lock;
-    private readonly IAnalysisService _analysis;
     private readonly RedisCacheService _cache;
-    private readonly WebhookService   _webhook;
+    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<RedisBackgroundWorker> _logger;
 
     public RedisBackgroundWorker(
         RedisJobQueue queue,
         RedLockService @lock,
-        IAnalysisService analysis,
         RedisCacheService cache,
-        WebhookService webhook,
+        IServiceProvider serviceProvider,
         ILogger<RedisBackgroundWorker> logger)
     {
         _queue    = queue;
         _lock     = @lock;
-        _analysis = analysis;
         _cache    = cache;
-        _webhook  = webhook;
+        _serviceProvider = serviceProvider;
         _logger   = logger;
     }
 
@@ -80,12 +78,16 @@ public sealed class RedisBackgroundWorker : BackgroundService
 
         var processed = await _lock.ExecuteWithLockAsync(pr.Owner, pr.Repo, pr.Number, async () =>
         {
+            using var scope = _serviceProvider.CreateScope();
+            var analysis = scope.ServiceProvider.GetRequiredService<IAnalysisService>();
+            var webhook = scope.ServiceProvider.GetRequiredService<WebhookService>();
+
             try
             {
                 var cached = await _cache.GetAnalysisAsync<AnalysisResult>(pr.Owner, pr.Repo, pr.Number);
                 activity?.SetTag("cache.hit", cached is not null);
 
-                var result = cached ?? await _analysis.AnalyzeAsync(pr);
+                var result = cached ?? await analysis.AnalyzeAsync(pr);
 
                 await _cache.SetAnalysisAsync(pr.Owner, pr.Repo, pr.Number, result);
                 await SetStatusAsync(cmd.JobId, "completed", pr.Number, result: result);
@@ -95,7 +97,7 @@ public sealed class RedisBackgroundWorker : BackgroundService
                 activity?.SetTag("analysis.alignment",  result.ClaimedVsActual.AlignmentAssessment);
 
                 if (!string.IsNullOrEmpty(cmd.WebhookUrl))
-                    await _webhook.SendAsync(cmd.WebhookUrl, new PullRequestAnalyzedEvent(
+                    await webhook.SendAsync(cmd.WebhookUrl, new PullRequestAnalyzedEvent(
                         cmd.JobId, pr.Number, result, DateTime.UtcNow));
 
                 _logger.LogInformation("[Job {JobId}] Completed", cmd.JobId);
@@ -110,7 +112,7 @@ public sealed class RedisBackgroundWorker : BackgroundService
                 await _queue.MoveToDeadLetterAsync(msgId, ex.Message);
 
                 if (!string.IsNullOrEmpty(cmd.WebhookUrl))
-                    await _webhook.SendAsync(cmd.WebhookUrl, new PullRequestAnalysisFailedEvent(
+                    await webhook.SendAsync(cmd.WebhookUrl, new PullRequestAnalysisFailedEvent(
                         cmd.JobId, pr.Number, ex.Message, DateTime.UtcNow));
             }
         });
