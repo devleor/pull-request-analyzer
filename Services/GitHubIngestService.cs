@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Octokit;
 using PullRequestAnalyzer.Models;
 
@@ -22,21 +21,11 @@ public sealed class GitHubIngestService : IGitHubService
 
     public async Task<PullRequestData> FetchPullRequestAsync(string owner, string repo, int prNumber)
     {
-        using var activity = Telemetry.Source.StartActivity("github.ingest", ActivityKind.Client);
-        activity?.SetTag("github.owner",     owner);
-        activity?.SetTag("github.repo",      repo);
-        activity?.SetTag("github.pr_number", prNumber);
-
         var pr      = await _client.PullRequest.Get(owner, repo, prNumber);
         var commits = await _client.PullRequest.Commits(owner, repo, prNumber);
         var files   = await _client.PullRequest.Files(owner, repo, prNumber);
 
-        activity?.SetTag("github.additions",     pr.Additions);
-        activity?.SetTag("github.deletions",     pr.Deletions);
-        activity?.SetTag("github.changed_files", pr.ChangedFiles);
-        activity?.SetTag("github.commits",       commits.Count);
-
-        return new PullRequestData
+        var data = new PullRequestData
         {
             Id                = pr.Id,
             Number            = pr.Number,
@@ -75,5 +64,7 @@ public sealed class GitHubIngestService : IGitHubService
                 RawUrl           = f.RawUrl
             }).ToList()
         };
+
+        return data;
     }
 }

@@ -8,7 +8,6 @@ public sealed class AnalysisResult
     [JsonPropertyName("pr_title")]           public string PrTitle           { get; set; } = string.Empty;
     [JsonPropertyName("analysis_timestamp")] public DateTime AnalysisTimestamp { get; set; }
     [JsonPropertyName("confidence_score")]   public double ConfidenceScore   { get; set; }
-    [JsonPropertyName("analysis_notes")]     public string AnalysisNotes     { get; set; } = string.Empty;
 
     [JsonPropertyName("executive_summary")]
     public List<string> ExecutiveSummary { get; set; } = [];
@@ -32,9 +31,8 @@ public sealed class ChangeUnit
     [JsonPropertyName("inferred_intent")]      public string InferredIntent     { get; set; } = string.Empty;
     [JsonPropertyName("confidence_level")]     public string ConfidenceLevel    { get; set; } = string.Empty;
     [JsonPropertyName("rationale")]            public string Rationale          { get; set; } = string.Empty;
+    [JsonPropertyName("evidence")]             public string Evidence           { get; set; } = string.Empty;
     [JsonPropertyName("test_coverage_signal")] public string TestCoverageSignal { get; set; } = string.Empty;
-    [JsonPropertyName("lines_added")]          public int    LinesAdded         { get; set; }
-    [JsonPropertyName("lines_deleted")]        public int    LinesDeleted       { get; set; }
 
     [JsonPropertyName("affected_files")]
     public List<string> AffectedFiles { get; set; } = [];
@@ -42,13 +40,8 @@ public sealed class ChangeUnit
 
 public sealed class ClaimedVsActual
 {
-    [JsonPropertyName("claimed_changes")]      public string ClaimedChanges      { get; set; } = string.Empty;
-    [JsonPropertyName("actual_changes")]       public string ActualChanges       { get; set; } = string.Empty;
     [JsonPropertyName("alignment_assessment")] public string AlignmentAssessment { get; set; } = string.Empty;
 
     [JsonPropertyName("discrepancies")]
     public List<string> Discrepancies { get; set; } = [];
-
-    [JsonPropertyName("additional_work_found")]
-    public List<string> AdditionalWorkFound { get; set; } = [];
 }
