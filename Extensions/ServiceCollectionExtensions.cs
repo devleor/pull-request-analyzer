@@ -1,6 +1,7 @@
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using PullRequestAnalyzer.Configuration;
 using PullRequestAnalyzer.Middleware;
 using PullRequestAnalyzer.Services;
 using StackExchange.Redis;
@@ -11,14 +12,30 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddDomainServices(this IServiceCollection services)
     {
+        // Core Services
         services.AddSingleton<RedisCacheService>();
         services.AddSingleton<JobQueueService>();
         services.AddSingleton<DistributedLockService>();
         services.AddSingleton<DiffChunkingService>();
+
+        // Analysis Services - now properly separated
+        services.AddScoped<IPromptService, PromptService>();
+        services.AddScoped<IJsonParsingService, JsonParsingService>();
+        services.AddScoped<IValidationService, ValidationService>();
+        services.AddScoped<IAnalysisService, SemanticKernelAnalysisServiceRefactored>();
+
+        // Integration Services
         services.AddScoped<IGitHubService, GitHubIngestService>();
-        services.AddScoped<IAnalysisService, SemanticKernelAnalysisService>();
         services.AddScoped<WebhookService>();
+
+        // Background Services
         services.AddHostedService<AnalysisBackgroundService>();
+
+        // Configuration
+        services.Configure<AnalysisConfiguration>(
+            services.BuildServiceProvider()
+                .GetRequiredService<IConfiguration>()
+                .GetSection("Analysis"));
 
         return services;
     }
