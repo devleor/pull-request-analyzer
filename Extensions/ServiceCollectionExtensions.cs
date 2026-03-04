@@ -65,7 +65,8 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddTelemetry(this IServiceCollection services, IConfiguration configuration)
     {
-        var langfuseHost = Environment.GetEnvironmentVariable("LANGFUSE_HOST")
+        var langfuseHost = Environment.GetEnvironmentVariable("LANGFUSE_BASE_URL")
+            ?? Environment.GetEnvironmentVariable("LANGFUSE_HOST")
             ?? configuration["Langfuse:Host"];
 
         if (string.IsNullOrEmpty(langfuseHost))
@@ -87,11 +88,13 @@ public static class ServiceCollectionExtensions
                     .AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
                     .AddSource("PullRequestAnalyzer")
+                    .AddSource("PullRequestAnalyzer*")
+                    .SetSampler(new AlwaysOnSampler())
                     .AddOtlpExporter(options =>
                     {
                         options.Endpoint = new Uri($"{langfuseHost}/api/public/otel/v1/traces");
                         options.Protocol = OtlpExportProtocol.HttpProtobuf;
-                        options.Headers = $"x-langfuse-public-key={Environment.GetEnvironmentVariable("LANGFUSE_PUBLIC_KEY")}," +
+                        options.Headers = $"x-langfuse-public-key={Environment.GetEnvironmentVariable("LANGFUSE_PUBLIC_KEY")}, " +
                                         $"x-langfuse-secret-key={Environment.GetEnvironmentVariable("LANGFUSE_SECRET_KEY")}";
                     });
             });

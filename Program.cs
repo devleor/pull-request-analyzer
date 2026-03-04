@@ -179,14 +179,19 @@ try
   }
 }
 
-IMPORTANT Rules:
-1. Base analysis on actual diffs, not just commit messages
-2. Every claim must include evidence from the diff
-3. Set confidence levels honestly based on evidence strength
-4. Identify ALL significant changes across ALL files
-5. For each change_unit, MUST populate affected_files with the actual file paths shown in the PR (files are listed in ""Files Changed in this PR"" section)
-6. Extract file paths from the file list provided at the beginning of the PR data
-7. Flag any potential risks or concerns");
+CRITICAL REQUIREMENTS:
+1. ""change_units"" MUST be an ARRAY of objects, even if there's only one change unit
+2. Create SEPARATE change_units for:
+   - Different types of changes (feature vs docs vs tests)
+   - Different modules or components
+   - Different functional areas
+3. For a PR with multiple files, you should typically have MULTIPLE change_units
+4. Each change_unit should group related files that form a logical change
+5. ""affected_files"" must list the ACTUAL file paths from the PR
+6. Example of CORRECT format: ""change_units"": [{...}, {...}, {...}]
+7. Example of WRONG format: ""change_units"": {...}
+8. If you see 10+ files changed, there should be at least 2-3 change_units
+9. Group files logically (e.g., all test files in one unit, all docs in another)");
             }
         }
         catch (Exception ex)

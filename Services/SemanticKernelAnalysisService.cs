@@ -214,7 +214,7 @@ public sealed class SemanticKernelAnalysisService : IAnalysisService
 
         if (value.IsNullOrEmpty)
         {
-            return @"You are an expert code reviewer analyzing a GitHub pull request. Provide a structured JSON analysis following this exact schema:
+            return @"You are an expert code reviewer analyzing a GitHub pull request. Provide a structured JSON analysis following this EXACT schema:
 
 {
   ""executive_summary"": [""2-6 bullet points summarizing key changes""],
@@ -227,7 +227,7 @@ public sealed class SemanticKernelAnalysisService : IAnalysisService
       ""confidence_level"": ""high|medium|low"",
       ""rationale"": ""Explanation for confidence level"",
       ""evidence"": ""Specific quote from diff"",
-      ""affected_files"": [""MUST list the actual file paths from the PR""],
+      ""affected_files"": [""list of file paths""],
       ""test_coverage_signal"": ""tests_added|tests_modified|no_tests""
     }
   ],
@@ -238,14 +238,19 @@ public sealed class SemanticKernelAnalysisService : IAnalysisService
   }
 }
 
-IMPORTANT Rules:
-1. Base analysis on actual diffs, not just commit messages
-2. Every claim must include evidence from the diff
-3. Set confidence levels honestly based on evidence strength
-4. Identify ALL significant changes across ALL files
-5. For each change_unit, MUST populate affected_files with the actual file paths shown in the PR (e.g., ""mindsdb/integrations/handlers/pocketbase/pocketbase_handler.py"")
-6. Extract file paths from the ""--- filename (status) ---"" headers in the file changes section
-7. Flag any potential risks or concerns";
+CRITICAL REQUIREMENTS:
+1. ""change_units"" MUST be an ARRAY of objects, even if there's only one change unit
+2. Create SEPARATE change_units for:
+   - Different types of changes (feature vs docs vs tests)
+   - Different modules or components
+   - Different functional areas
+3. For a PR with multiple files, you should typically have MULTIPLE change_units
+4. Each change_unit should group related files that form a logical change
+5. ""affected_files"" must list the ACTUAL file paths from the PR
+6. Example of CORRECT format: ""change_units"": [{...}, {...}, {...}]
+7. Example of WRONG format: ""change_units"": {...}
+8. If you see 10+ files changed, there should be at least 2-3 change_units
+9. Group files logically (e.g., all test files in one unit, all docs in another)";
         }
 
         return value.ToString();
@@ -308,6 +313,9 @@ IMPORTANT Rules:
     {
         try
         {
+            _logger.LogDebug("Raw LLM response (first 500 chars): {Response}",
+                rawResponse.Length > 500 ? rawResponse.Substring(0, 500) + "..." : rawResponse);
+
             var jsonString = rawResponse;
             if (rawResponse.Contains("```json"))
             {
@@ -328,6 +336,37 @@ IMPORTANT Rules:
                 }
             }
 
+            _logger.LogDebug("Cleaned JSON string (first 500 chars): {Json}",
+                jsonString.Length > 500 ? jsonString.Substring(0, 500) + "..." : jsonString);
+
+            // Fix common LLM error: change_units as object instead of array
+            if (jsonString.Contains("\"change_units\": {") && !jsonString.Contains("\"change_units\": ["))
+            {
+                _logger.LogWarning("Fixing malformed JSON: change_units is an object, converting to array");
+                jsonString = System.Text.RegularExpressions.Regex.Replace(
+                    jsonString,
+                    @"""change_units""\s*:\s*{",
+                    "\"change_units\": [{");
+
+                // Find the closing brace for change_units
+                var changeUnitsStart = jsonString.IndexOf("\"change_units\": [{");
+                if (changeUnitsStart >= 0)
+                {
+                    var braceCount = 1;
+                    var i = changeUnitsStart + "\"change_units\": [{".Length;
+                    while (i < jsonString.Length && braceCount > 0)
+                    {
+                        if (jsonString[i] == '{') braceCount++;
+                        else if (jsonString[i] == '}') braceCount--;
+                        i++;
+                    }
+                    if (braceCount == 0 && i > 0)
+                    {
+                        jsonString = jsonString.Insert(i, "]");
+                    }
+                }
+            }
+
             var options = new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true,
@@ -341,6 +380,14 @@ IMPORTANT Rules:
             result.AnalysisTimestamp = DateTime.UtcNow;
             result.PrNumber = pr.Number;
             result.PrTitle = pr.Title;
+
+            foreach (var changeUnit in result.ChangeUnits)
+            {
+                if (string.IsNullOrEmpty(changeUnit.Id))
+                {
+                    changeUnit.Id = Guid.NewGuid().ToString();
+                }
+            }
 
             if (result.ChangeUnits.Any())
             {

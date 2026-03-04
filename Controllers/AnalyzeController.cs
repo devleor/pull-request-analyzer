@@ -68,11 +68,42 @@ public sealed class AnalyzeController : ControllerBase
             _logger.LogInformation("Starting synchronous analysis for PR {Owner}/{Repo}#{Number}",
                 pullRequest.Owner, pullRequest.Repo, pullRequest.Number);
 
+            _logger.LogInformation("PR data check - ChangedFiles: {ChangedFilesCount}, Commits: {CommitsCount}",
+                pullRequest.ChangedFiles?.Count ?? -1,
+                pullRequest.Commits?.Count ?? -1);
+
             var stopwatch = Stopwatch.StartNew();
 
+            // If we only have basic info (owner, repo, number), fetch full PR data from GitHub
+            if (pullRequest.ChangedFiles == null || pullRequest.ChangedFiles.Count == 0)
+            {
+                _logger.LogInformation("Fetching complete PR data from GitHub for {Owner}/{Repo}#{Number}",
+                    pullRequest.Owner, pullRequest.Repo, pullRequest.Number);
+
+                // Create a GitHub service instance
+                var githubService = HttpContext.RequestServices.GetRequiredService<IGitHubService>();
+
+                // Fetch complete PR data
+                var fullPrData = await githubService.FetchPullRequestAsync(
+                    pullRequest.Owner,
+                    pullRequest.Repo,
+                    pullRequest.Number);
+
+                if (fullPrData != null)
+                {
+                    pullRequest = fullPrData;
+                    _logger.LogInformation("Successfully fetched PR data with {FileCount} files",
+                        pullRequest.ChangedFiles?.Count ?? 0);
+                }
+                else
+                {
+                    return BadRequest(new { error = "Failed to fetch PR data from GitHub" });
+                }
+            }
+
             // Perform the FULL analysis (always fresh, no caching)
-            _logger.LogInformation("Performing full LLM analysis for PR {Owner}/{Repo}#{Number}",
-                pullRequest.Owner, pullRequest.Repo, pullRequest.Number);
+            _logger.LogInformation("Performing full LLM analysis for PR {Owner}/{Repo}#{Number} with {FileCount} files",
+                pullRequest.Owner, pullRequest.Repo, pullRequest.Number, pullRequest.ChangedFiles?.Count ?? 0);
 
             var result = await _analysisService.AnalyzeAsync(pullRequest);
 

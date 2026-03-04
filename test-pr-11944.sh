@@ -153,22 +153,11 @@ echo ""
 echo -e "Building analysis request..."
 ANALYSIS_REQUEST=$(cat <<EOF
 {
-  "pull_request_data": $(echo "$PR_DATA" | jq --argjson commits "$COMMITS_DATA" '{
-    number: .number,
-    title: .title,
-    owner: "'$OWNER'",
-    repo: "'$REPO'",
-    author: .author,
-    description: .description,
-    created_at: .created_at,
-    updated_at: .updated_at,
-    merged_at: .merged_at,
-    state: .state,
-    additions: .additions,
-    deletions: .deletions,
-    commits: $commits,
-    changed_files: .changed_files
-  }')
+  "pull_request_data": {
+    "number": $PR_NUMBER,
+    "owner": "$OWNER",
+    "repo": "$REPO"
+  }
 }
 EOF
 )

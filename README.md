@@ -267,6 +267,8 @@ pull-request-analyzer/
 
 ## 🔍 Observability Dashboard
 
+![Langfuse Dashboard](docs/langfuse.png)
+
 Access Langfuse dashboard to monitor:
 - **Token Usage**: Track consumption per model
 - **Latency Distribution**: P50, P95, P99 metrics
