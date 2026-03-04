@@ -1,0 +1,39 @@
+{
+  "pr_number": 11944,
+  "pr_title": "Pocketbase handler",
+  "analysis_timestamp": "2026-03-04T14:35:46.5963446Z",
+  "confidence_score": 0.95,
+  "executive_summary": [
+    "- Added PocketBase handler to integrate with MindsDB via REST API.",
+    "- Enables querying PocketBase collections through MindsDB SQL queries.",
+    "- Includes authentication and connection handling for PocketBase.",
+    "- Updates documentation and file structure for new features.",
+    "- Fixes and adds tests for the new integration."
+  ],
+  "change_units": [
+    {
+      "id": "89e19294-a37c-41bf-a00c-97ff9014d9d4",
+      "type": "feature",
+      "title": "Pocketbase Handler",
+      "description": "Adds a PocketBase handler that authenticates via PocketBase REST API and translates MindsDB SQL queries into PocketBase calls.",
+      "inferred_intent": "Non-breaking change to add new functionality",
+      "confidence_level": "high",
+      "rationale": "",
+      "evidence": "Commit #11873, PR description mentions adding a PocketBase handler.",
+      "test_coverage_signal": "",
+      "affected_files": [
+        "mindsdb/api/executor/sql_query/steps/insert_step.py",
+        "mindsdb/integrations/handlers/pocketbase_handler/README.md"
+      ]
+    }
+  ],
+  "risks_and_concerns": [
+    "- Potential issues with PocketBase authentication and token management.",
+    "- Risk of data privacy if PocketBase credentials are exposed.",
+    "- Dependency on MindsDB being available and properly configured."
+  ],
+  "claimed_vs_actual": {
+    "alignment_assessment": "aligned",
+    "discrepancies": []
+  }
+}

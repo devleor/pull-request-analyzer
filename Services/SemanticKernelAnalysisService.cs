@@ -1,43 +1,92 @@
 #pragma warning disable SKEXP0010
 
 using System.Diagnostics;
-using System.Text;
-using System.Text.Json;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
+using PullRequestAnalyzer.Configuration;
 using PullRequestAnalyzer.Models;
-using StackExchange.Redis;
 
 namespace PullRequestAnalyzer.Services;
 
+/// <summary>
+/// Analysis service using Microsoft Semantic Kernel for LLM orchestration
+/// </summary>
 public sealed class SemanticKernelAnalysisService : IAnalysisService
 {
     private readonly Kernel _kernel;
     private readonly IChatCompletionService _chatService;
-    private readonly DiffChunkingService _chunker;
-    private readonly IConnectionMultiplexer _redis;
+    private readonly IPromptService _promptService;
+    private readonly IJsonParsingService _jsonParser;
+    private readonly IValidationService _validationService;
+    private readonly AnalysisConfiguration _config;
     private readonly ILogger<SemanticKernelAnalysisService> _logger;
     private readonly string _modelName;
+
     private static readonly ActivitySource ActivitySource = new("PullRequestAnalyzer", "1.0.0");
 
     public SemanticKernelAnalysisService(
-        DiffChunkingService chunker,
-        IConnectionMultiplexer redis,
-        IConfiguration config,
+        IPromptService promptService,
+        IJsonParsingService jsonParser,
+        IValidationService validationService,
+        IConfiguration configuration,
         ILogger<SemanticKernelAnalysisService> logger)
     {
-        _chunker = chunker;
-        _redis = redis;
+        _promptService = promptService;
+        _jsonParser = jsonParser;
+        _validationService = validationService;
         _logger = logger;
 
-        var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")
-                     ?? config["OpenRouter:ApiKey"]
-                     ?? throw new InvalidOperationException("OPENROUTER_API_KEY is not configured");
+        _config = configuration.GetSection("Analysis").Get<AnalysisConfiguration>()
+                  ?? new AnalysisConfiguration();
 
         _modelName = Environment.GetEnvironmentVariable("OPENROUTER_MODEL")
-                    ?? config["OpenRouter:Model"]
+                    ?? configuration["OpenRouter:Model"]
                     ?? "liquid/lfm-2.5-1.2b-instruct:free";
+
+        _kernel = BuildKernel(configuration);
+        _chatService = _kernel.GetRequiredService<IChatCompletionService>();
+
+        _logger.LogInformation("Analysis service initialized with model: {Model}", _modelName);
+    }
+
+    public async Task<AnalysisResult> AnalyzeAsync(PullRequestData pr)
+    {
+        using var activity = StartActivity(pr);
+        var correlationId = new TraceId();
+
+        using var scope = _logger.BeginScope(new Dictionary<string, object>
+        {
+            ["CorrelationId"] = correlationId.Value,
+            ["PR"] = new PullRequestId(pr.Owner, pr.Repo, pr.Number).ToString(),
+            ["Operation"] = "PRAnalysis"
+        });
+
+        try
+        {
+            _logger.LogInformation("Starting PR analysis - Files: {FileCount}, Commits: {CommitCount}",
+                pr.ChangedFiles.Count, pr.Commits.Count);
+
+            var chatHistory = await BuildChatHistoryAsync(pr);
+            var response = await ExecuteLlmCallAsync(chatHistory, activity);
+            var result = ProcessResponse(response, pr);
+
+            LogAnalysisCompletion(result);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Analysis failed");
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
+    }
+
+    private Kernel BuildKernel(IConfiguration configuration)
+    {
+        var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")
+                     ?? configuration["OpenRouter:ApiKey"]
+                     ?? throw new InvalidOperationException("OPENROUTER_API_KEY is not configured");
 
         var builder = Kernel.CreateBuilder();
 
@@ -47,7 +96,7 @@ public sealed class SemanticKernelAnalysisService : IAnalysisService
             endpoint: new Uri("https://openrouter.ai/api/v1"),
             httpClient: new HttpClient
             {
-                Timeout = TimeSpan.FromSeconds(120),
+                Timeout = _config.Llm.Timeout,
                 DefaultRequestHeaders =
                 {
                     { "HTTP-Referer", "https://github.com/devleor/pull-request-analyzer" },
@@ -55,18 +104,12 @@ public sealed class SemanticKernelAnalysisService : IAnalysisService
                 }
             });
 
-        _kernel = builder.Build();
-        _chatService = _kernel.GetRequiredService<IChatCompletionService>();
-
-        _logger.LogInformation("Semantic Kernel service initialized with model: {Model}", _modelName);
+        return builder.Build();
     }
 
-    public async Task<AnalysisResult> AnalyzeAsync(PullRequestData pr)
+    private Activity? StartActivity(PullRequestData pr)
     {
-        var stopwatch = Stopwatch.StartNew();
-        var correlationId = Guid.NewGuid().ToString();
-
-        using var activity = ActivitySource.StartActivity(
+        var activity = ActivitySource.StartActivity(
             $"pr_analysis.{pr.Number}",
             ActivityKind.Internal);
 
@@ -77,386 +120,142 @@ public sealed class SemanticKernelAnalysisService : IAnalysisService
         activity?.SetTag("pr.author", pr.Author);
         activity?.SetTag("pr.file_count", pr.ChangedFiles.Count);
         activity?.SetTag("pr.commit_count", pr.Commits.Count);
-        activity?.SetTag("correlation_id", correlationId);
         activity?.SetTag("llm.model", _modelName);
 
-        using var scope = _logger.BeginScope(new Dictionary<string, object>
-        {
-            ["CorrelationId"] = correlationId,
-            ["PR"] = $"{pr.Owner}/{pr.Repo}#{pr.Number}",
-            ["Operation"] = "PRAnalysis"
-        });
-
-        _logger.LogInformation("Starting PR analysis - Files: {FileCount}, Commits: {CommitCount}",
-            pr.ChangedFiles.Count, pr.Commits.Count);
-
-        try
-        {
-            var systemPrompt = await GetSystemPromptAsync()
-                              ?? throw new InvalidOperationException("System prompt not found in Redis");
-
-            var prDataContent = BuildPRDataContent(pr);
-
-            var chatHistory = new ChatHistory();
-            chatHistory.AddSystemMessage(systemPrompt);
-            chatHistory.AddUserMessage(prDataContent);
-
-            var totalPromptLength = systemPrompt.Length + prDataContent.Length;
-
-            activity?.SetTag("llm.prompt_tokens_estimate", totalPromptLength / 4);
-            activity?.SetTag("llm.max_tokens", 4096);
-            activity?.SetTag("llm.temperature", 0.2);
-
-            _logger.LogInformation("PR has {FileCount} files: {FileList}",
-                pr.ChangedFiles.Count,
-                string.Join(", ", pr.ChangedFiles.Take(5).Select(f => f.Filename)));
-
-            _logger.LogDebug("Conversation constructed - System: {SystemLength} chars, PR Data: {DataLength} chars",
-                systemPrompt.Length, prDataContent.Length);
-
-            var executionSettings = new OpenAIPromptExecutionSettings
-            {
-                Temperature = 0.2,
-                MaxTokens = 4096
-            };
-
-            using var llmSpan = ActivitySource.StartActivity(
-                "generation",
-                ActivityKind.Client);
-
-            llmSpan?.SetTag("gen_ai.system", "openrouter");
-            llmSpan?.SetTag("gen_ai.request.model", _modelName);
-            llmSpan?.SetTag("gen_ai.request.temperature", 0.2);
-            llmSpan?.SetTag("gen_ai.request.max_tokens", 4096);
-            llmSpan?.SetTag("gen_ai.request.top_p", 1.0);
-
-            var messages = new[]
-            {
-                new { role = "system", content = systemPrompt },
-                new { role = "user", content = prDataContent }
-            };
-
-            llmSpan?.SetTag("gen_ai.prompt", JsonSerializer.Serialize(messages));
-            llmSpan?.SetTag("gen_ai.usage.prompt_tokens", totalPromptLength / 4);
-
-            var llmStopwatch = Stopwatch.StartNew();
-            var response = await _chatService.GetChatMessageContentAsync(
-                chatHistory,
-                executionSettings,
-                _kernel);
-
-            llmStopwatch.Stop();
-            var rawResponse = response.Content ?? throw new InvalidOperationException("Empty response from LLM");
-
-            llmSpan?.SetTag("gen_ai.completion", rawResponse);
-            llmSpan?.SetTag("gen_ai.usage.completion_tokens", rawResponse.Length / 4);
-            llmSpan?.SetTag("gen_ai.usage.total_tokens", (totalPromptLength + rawResponse.Length) / 4);
-            llmSpan?.SetTag("gen_ai.response.finish_reasons", new[] { "stop" });
-            llmSpan?.SetStatus(ActivityStatusCode.Ok);
-
-            var outputTokens = rawResponse.Length / 4;
-            var totalTokens = (totalPromptLength + rawResponse.Length) / 4;
-            var cost = EstimateCost(totalTokens, _modelName);
-
-            activity?.SetTag("llm.output_tokens", outputTokens);
-            activity?.SetTag("llm.total_tokens", totalTokens);
-            activity?.SetTag("llm.latency_ms", llmStopwatch.ElapsedMilliseconds);
-            activity?.SetTag("llm.cost_usd", cost);
-
-            var result = ParseResponse(rawResponse, pr);
-
-            var actualFiles = pr.ChangedFiles.Select(f => f.Filename).ToArray();
-            var validationResult = ValidateResponse(result, actualFiles, pr);
-
-            if (!validationResult.IsValid)
-            {
-                _logger.LogWarning("Analysis contains unverified content - Issues: {Issues}",
-                    string.Join(", ", validationResult.Issues));
-                activity?.SetTag("validation.passed", false);
-            }
-            else
-            {
-                activity?.SetTag("validation.passed", true);
-            }
-
-            stopwatch.Stop();
-
-            activity?.SetTag("analysis.duration_ms", stopwatch.ElapsedMilliseconds);
-            activity?.SetTag("analysis.change_units", result.ChangeUnits.Count);
-            activity?.SetTag("analysis.confidence_score", result.ConfidenceScore);
-
-            _logger.LogInformation(
-                "Analysis completed - Duration: {Duration}ms, LLM: {LLMDuration}ms, " +
-                "Tokens: ~{Tokens}, Cost: ~${Cost:F4}, ChangeUnits: {ChangeUnits}, " +
-                "Confidence: {Confidence:F2}, Valid: {Valid}",
-                stopwatch.ElapsedMilliseconds,
-                llmStopwatch.ElapsedMilliseconds,
-                totalTokens,
-                cost,
-                result.ChangeUnits.Count,
-                result.ConfidenceScore,
-                validationResult.IsValid);
-
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Analysis failed after {Duration}ms", stopwatch.ElapsedMilliseconds);
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            throw;
-        }
+        return activity;
     }
 
-    private async Task<string?> GetSystemPromptAsync()
+    private async Task<ChatHistory> BuildChatHistoryAsync(PullRequestData pr)
     {
-        var db = _redis.GetDatabase();
-        var value = await db.StringGetAsync("prompt:pr_analysis_system");
+        var systemPrompt = await _promptService.GetSystemPromptAsync();
+        var prContent = _promptService.BuildPullRequestContent(pr);
 
-        if (value.IsNullOrEmpty)
-        {
-            return @"You are an expert code reviewer analyzing a GitHub pull request. Provide a structured JSON analysis following this EXACT schema:
+        var chatHistory = new ChatHistory();
+        chatHistory.AddSystemMessage(systemPrompt);
+        chatHistory.AddUserMessage(prContent);
 
-{
-  ""executive_summary"": [""2-6 bullet points summarizing key changes""],
-  ""change_units"": [
-    {
-      ""type"": ""feature|bugfix|refactor|test|docs|performance|security|style"",
-      ""title"": ""Short descriptive title"",
-      ""description"": ""What changed"",
-      ""inferred_intent"": ""Why it likely changed"",
-      ""confidence_level"": ""high|medium|low"",
-      ""rationale"": ""Explanation for confidence level"",
-      ""evidence"": ""Specific quote from diff"",
-      ""affected_files"": [""list of file paths""],
-      ""test_coverage_signal"": ""tests_added|tests_modified|no_tests""
-    }
-  ],
-  ""risks_and_concerns"": [""List of identified risks""],
-  ""claimed_vs_actual"": {
-    ""alignment_assessment"": ""aligned|partially_aligned|misaligned"",
-    ""discrepancies"": [""List of discrepancies if any""]
-  }
-}
+        LogPromptInfo(pr.ChangedFiles);
 
-CRITICAL REQUIREMENTS:
-1. ""change_units"" MUST be an ARRAY of objects, even if there's only one change unit
-2. Create SEPARATE change_units for:
-   - Different types of changes (feature vs docs vs tests)
-   - Different modules or components
-   - Different functional areas
-3. For a PR with multiple files, you should typically have MULTIPLE change_units
-4. Each change_unit should group related files that form a logical change
-5. ""affected_files"" must list the ACTUAL file paths from the PR
-6. Example of CORRECT format: ""change_units"": [{...}, {...}, {...}]
-7. Example of WRONG format: ""change_units"": {...}
-8. If you see 10+ files changed, there should be at least 2-3 change_units
-9. Group files logically (e.g., all test files in one unit, all docs in another)";
-        }
-
-        return value.ToString();
+        return chatHistory;
     }
 
-    private string BuildPRDataContent(PullRequestData pr)
+    private async Task<string> ExecuteLlmCallAsync(ChatHistory chatHistory, Activity? activity)
     {
-        var content = new StringBuilder();
-        content.AppendLine("Analyze this pull request and provide a structured JSON response:");
-        content.AppendLine();
-        content.AppendLine($"Title: {pr.Title}");
-        content.AppendLine($"Author: {pr.Author}");
-        content.AppendLine($"Description: {pr.Description ?? "No description provided"}");
-        content.AppendLine();
-
-        content.AppendLine("Files Changed in this PR:");
-        foreach (var file in pr.ChangedFiles)
+        var executionSettings = new OpenAIPromptExecutionSettings
         {
-            content.AppendLine($"- {file.Filename} ({file.Status})");
-        }
-        content.AppendLine();
-
-        content.AppendLine("Commits:");
-        foreach (var commit in pr.Commits.Take(20))
-        {
-            content.AppendLine($"- {commit.Message}");
-        }
-        if (pr.Commits.Count > 20)
-        {
-            content.AppendLine($"... and {pr.Commits.Count - 20} more commits");
-        }
-        content.AppendLine();
-
-        content.AppendLine("Detailed File Changes with Diffs:");
-        foreach (var file in pr.ChangedFiles)
-        {
-            var truncatedPatch = _chunker.TruncatePatch(file.Patch, 2000);
-            content.AppendLine($"\n=== FILE: {file.Filename} (STATUS: {file.Status}) ===");
-            content.AppendLine(truncatedPatch);
-        }
-
-        return content.ToString();
-    }
-
-    private static double EstimateCost(int tokens, string model)
-    {
-        var costPer1MTokens = model switch
-        {
-            var m when m.Contains("claude-3.5-sonnet") => 3.00,
-            var m when m.Contains("gpt-4o") => 5.00,
-            var m when m.Contains("gemini") => 0.15,
-            var m when m.Contains("llama") => 0.18,
-            _ => 1.00
+            Temperature = _config.Llm.Temperature,
+            MaxTokens = _config.Llm.MaxTokens
         };
 
-        return (tokens / 1_000_000.0) * costPer1MTokens;
+        using var llmSpan = StartLlmSpan();
+
+        // Record the prompt in the span for Langfuse
+        var messages = chatHistory.Select(m => new
+        {
+            role = m.Role.ToString().ToLower(),
+            content = m.Content
+        }).ToArray();
+
+        var promptJson = System.Text.Json.JsonSerializer.Serialize(messages);
+        llmSpan?.SetTag("gen_ai.prompt", promptJson);
+
+        // Estimate prompt tokens
+        var totalPromptLength = messages.Sum(m => m.content?.Length ?? 0);
+        llmSpan?.SetTag("gen_ai.usage.prompt_tokens", totalPromptLength / _config.Llm.PromptTokensEstimate);
+
+        var stopwatch = Stopwatch.StartNew();
+
+        var response = await _chatService.GetChatMessageContentAsync(
+            chatHistory,
+            executionSettings,
+            _kernel);
+
+        stopwatch.Stop();
+
+        // Record the completion in the span for Langfuse
+        llmSpan?.SetTag("gen_ai.completion", response.Content);
+
+        RecordLlmMetrics(llmSpan, activity, response.Content, stopwatch.ElapsedMilliseconds);
+
+        return response.Content ?? throw new InvalidOperationException("Empty response from LLM");
     }
 
-    private AnalysisResult ParseResponse(string rawResponse, PullRequestData pr)
+    private AnalysisResult ProcessResponse(string rawResponse, PullRequestData pr)
     {
-        try
+        var result = _jsonParser.ParseLlmResponse(rawResponse, pr);
+        var validation = _validationService.ValidateAnalysis(result, pr);
+
+        if (!validation.IsValid)
         {
-            _logger.LogDebug("Raw LLM response (first 500 chars): {Response}",
-                rawResponse.Length > 500 ? rawResponse.Substring(0, 500) + "..." : rawResponse);
-
-            var jsonString = rawResponse;
-            if (rawResponse.Contains("```json"))
-            {
-                var start = rawResponse.IndexOf("```json") + 7;
-                var end = rawResponse.LastIndexOf("```");
-                if (end > start)
-                {
-                    jsonString = rawResponse.Substring(start, end - start).Trim();
-                }
-            }
-            else if (rawResponse.Contains("```"))
-            {
-                var start = rawResponse.IndexOf("```") + 3;
-                var end = rawResponse.LastIndexOf("```");
-                if (end > start)
-                {
-                    jsonString = rawResponse.Substring(start, end - start).Trim();
-                }
-            }
-
-            _logger.LogDebug("Cleaned JSON string (first 500 chars): {Json}",
-                jsonString.Length > 500 ? jsonString.Substring(0, 500) + "..." : jsonString);
-
-            // Fix common LLM error: change_units as object instead of array
-            if (jsonString.Contains("\"change_units\": {") && !jsonString.Contains("\"change_units\": ["))
-            {
-                _logger.LogWarning("Fixing malformed JSON: change_units is an object, converting to array");
-                jsonString = System.Text.RegularExpressions.Regex.Replace(
-                    jsonString,
-                    @"""change_units""\s*:\s*{",
-                    "\"change_units\": [{");
-
-                // Find the closing brace for change_units
-                var changeUnitsStart = jsonString.IndexOf("\"change_units\": [{");
-                if (changeUnitsStart >= 0)
-                {
-                    var braceCount = 1;
-                    var i = changeUnitsStart + "\"change_units\": [{".Length;
-                    while (i < jsonString.Length && braceCount > 0)
-                    {
-                        if (jsonString[i] == '{') braceCount++;
-                        else if (jsonString[i] == '}') braceCount--;
-                        i++;
-                    }
-                    if (braceCount == 0 && i > 0)
-                    {
-                        jsonString = jsonString.Insert(i, "]");
-                    }
-                }
-            }
-
-            var options = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-                AllowTrailingCommas = true,
-                ReadCommentHandling = JsonCommentHandling.Skip
-            };
-
-            var result = JsonSerializer.Deserialize<AnalysisResult>(jsonString, options)
-                        ?? throw new InvalidOperationException("Failed to deserialize analysis result");
-
-            result.AnalysisTimestamp = DateTime.UtcNow;
-            result.PrNumber = pr.Number;
-            result.PrTitle = pr.Title;
-
-            foreach (var changeUnit in result.ChangeUnits)
-            {
-                if (string.IsNullOrEmpty(changeUnit.Id))
-                {
-                    changeUnit.Id = Guid.NewGuid().ToString();
-                }
-            }
-
-            if (result.ChangeUnits.Any())
-            {
-                var confidenceMap = new Dictionary<string, double>
-                {
-                    ["high"] = 0.95,
-                    ["medium"] = 0.75,
-                    ["low"] = 0.50
-                };
-
-                var scores = result.ChangeUnits
-                    .Select(cu => confidenceMap.GetValueOrDefault(cu.ConfidenceLevel?.ToLower() ?? "low", 0.50))
-                    .ToList();
-
-                result.ConfidenceScore = scores.Average();
-            }
-            else
-            {
-                result.ConfidenceScore = 0.50;
-            }
-
-            return result;
+            _logger.LogWarning("Analysis contains unverified content - Issues: {Issues}",
+                string.Join(", ", validation.Issues));
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to parse LLM response");
-            throw new InvalidOperationException("Failed to parse analysis response", ex);
-        }
+
+        return result;
     }
 
-    private ValidationResult ValidateResponse(AnalysisResult result, string[] actualFiles, PullRequestData pr)
+    private Activity? StartLlmSpan()
     {
-        var issues = new List<string>();
-
-        foreach (var changeUnit in result.ChangeUnits)
-        {
-            foreach (var file in changeUnit.AffectedFiles)
-            {
-                if (!actualFiles.Contains(file, StringComparer.OrdinalIgnoreCase))
-                {
-                    issues.Add($"Referenced non-existent file: {file}");
-                }
-            }
-        }
-
-        var referencedFiles = result.ChangeUnits
-            .SelectMany(cu => cu.AffectedFiles)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToHashSet();
-
-        var uncoveredFiles = actualFiles
-            .Where(f => !referencedFiles.Contains(f))
-            .ToList();
-
-        if (uncoveredFiles.Count > actualFiles.Length * 0.3)
-        {
-            issues.Add($"Analysis missed {uncoveredFiles.Count}/{actualFiles.Length} files");
-        }
-
-        return new ValidationResult
-        {
-            IsValid = issues.Count == 0,
-            Issues = issues
-        };
+        var span = ActivitySource.StartActivity("generation", ActivityKind.Client);
+        span?.SetTag("gen_ai.system", "openrouter");
+        span?.SetTag("gen_ai.request.model", _modelName);
+        span?.SetTag("gen_ai.request.temperature", _config.Llm.Temperature);
+        span?.SetTag("gen_ai.request.max_tokens", _config.Llm.MaxTokens);
+        return span;
     }
 
-    private class ValidationResult
+    private void RecordLlmMetrics(Activity? span, Activity? parentActivity, string? response, long latencyMs)
     {
-        public bool IsValid { get; set; }
-        public List<string> Issues { get; set; } = new();
+        if (response == null) return;
+
+        var outputTokens = response.Length / _config.Llm.PromptTokensEstimate;
+
+        // Get prompt tokens from span if available
+        var promptTokens = 0;
+        if (span?.GetTagItem("gen_ai.usage.prompt_tokens") is int pt)
+        {
+            promptTokens = pt;
+        }
+
+        var totalTokens = promptTokens + outputTokens;
+        var cost = EstimateCost(totalTokens);
+
+        span?.SetTag("gen_ai.usage.completion_tokens", outputTokens);
+        span?.SetTag("gen_ai.usage.total_tokens", totalTokens);
+        span?.SetTag("gen_ai.response.finish_reasons", new[] { "stop" });
+        span?.SetStatus(ActivityStatusCode.Ok);
+
+        parentActivity?.SetTag("llm.prompt_tokens_estimate", promptTokens);
+        parentActivity?.SetTag("llm.output_tokens", outputTokens);
+        parentActivity?.SetTag("llm.total_tokens", totalTokens);
+        parentActivity?.SetTag("llm.latency_ms", latencyMs);
+        parentActivity?.SetTag("llm.cost_usd", cost);
+    }
+
+    private double EstimateCost(int tokens)
+    {
+        var costKey = _config.Llm.ModelCosts.Keys
+            .FirstOrDefault(k => _modelName.Contains(k))
+            ?? "default";
+
+        var costPerMillion = _config.Llm.ModelCosts[costKey];
+        return (tokens / 1_000_000.0) * costPerMillion;
+    }
+
+    private void LogPromptInfo(List<ChangedFileData> files)
+    {
+        var fileList = string.Join(", ", files.Take(_config.Processing.MaxFilesToShow)
+            .Select(f => f.Filename));
+
+        _logger.LogInformation("PR has {FileCount} files: {FileList}",
+            files.Count, fileList);
+    }
+
+    private void LogAnalysisCompletion(AnalysisResult result)
+    {
+        _logger.LogInformation(
+            "Analysis completed - ChangeUnits: {ChangeUnits}, Confidence: {Confidence:F2}",
+            result.ChangeUnits.Count,
+            result.ConfidenceScore);
     }
 }

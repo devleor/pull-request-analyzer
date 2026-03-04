@@ -22,7 +22,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPromptService, PromptService>();
         services.AddScoped<IJsonParsingService, JsonParsingService>();
         services.AddScoped<IValidationService, ValidationService>();
-        services.AddScoped<IAnalysisService, SemanticKernelAnalysisServiceRefactored>();
+        services.AddScoped<IAnalysisService, SemanticKernelAnalysisService>();
 
         // Integration Services
         services.AddScoped<IGitHubService, GitHubIngestService>();
