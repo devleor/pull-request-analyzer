@@ -1,11 +1,8 @@
-using StackExchange.Redis;
-using PullRequestAnalyzer.Services;
+using PullRequestAnalyzer.Extensions;
 using PullRequestAnalyzer.Middleware;
 using Serilog;
 using Serilog.Events;
-using OpenTelemetry;
 
-// Configure Serilog for structured logging
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
     .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
@@ -23,7 +20,6 @@ try
 
     var builder = WebApplication.CreateBuilder(args);
 
-    // Use Serilog
     builder.Host.UseSerilog();
 
     builder.Configuration
@@ -31,10 +27,6 @@ try
         .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true)
         .AddEnvironmentVariables();
 
-    // Configure OpenTelemetry for Langfuse
-    TelemetryService.ConfigureOpenTelemetry(builder);
-
-    // Add services
     builder.Services.AddControllers();
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen(c =>
@@ -47,11 +39,9 @@ try
         });
     });
 
-    // CORS
     builder.Services.AddCors(o =>
         o.AddPolicy("AllowAll", p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
 
-    // HTTP Clients
     builder.Services.AddHttpClient("openrouter", c =>
     {
         c.Timeout = TimeSpan.FromSeconds(120);
@@ -61,77 +51,13 @@ try
     builder.Services.AddHttpClient("webhook", c =>
         c.Timeout = TimeSpan.FromSeconds(30));
 
-    // Redis Configuration
-    var redisConn = Environment.GetEnvironmentVariable("REDIS_URL")
-        ?? builder.Configuration["Redis:ConnectionString"]
-        ?? "localhost:6379";
-
-    var redis = ConnectionMultiplexer.Connect(new ConfigurationOptions
-    {
-        EndPoints = { redisConn },
-        AbortOnConnectFail = false,
-        ConnectRetry = 3,
-        ConnectTimeout = 5000,
-        SyncTimeout = 5000,
-        AsyncTimeout = 5000,
-        KeepAlive = 60,
-        AllowAdmin = false
-    });
-
-    builder.Services.AddSingleton<IConnectionMultiplexer>(redis);
-
-    // Core Services
-    builder.Services.AddSingleton<RedisCacheService>();
-    builder.Services.AddSingleton<JobQueueService>();
-    builder.Services.AddSingleton<DistributedLockService>();
-    builder.Services.AddSingleton<DiffChunkingService>();
-
-    // Prompt Template Service
-    builder.Services.AddSingleton<IPromptTemplateService, PromptTemplateService>();
-
-    // GitHub Service
-    builder.Services.AddScoped<IGitHubService, GitHubIngestService>();
-
-    // Analysis Service - Use OpenTelemetry version if Langfuse is configured
-    var langfuseEnabled = !string.IsNullOrEmpty(builder.Configuration["LANGFUSE_PUBLIC_KEY"]) ||
-                         !string.IsNullOrEmpty(builder.Configuration["Langfuse:PublicKey"]);
-
-    if (langfuseEnabled)
-    {
-        builder.Services.AddScoped<IAnalysisService, LlmAnalysisService>();
-        Log.Information("Using OpenTelemetry-based analysis service with Langfuse export");
-    }
-    else
-    {
-        builder.Services.AddScoped<IAnalysisService, LlmAnalysisService>();
-        Log.Warning("Langfuse not configured - using standard analysis service");
-    }
-
-    builder.Services.AddScoped<WebhookService>();
-
-    // Background Worker
-    builder.Services.AddHostedService<AnalysisBackgroundService>();
-
-    // Rate Limiting Configuration
-    builder.Services.AddSingleton(provider =>
-    {
-        var config = provider.GetRequiredService<IConfiguration>();
-        return new RateLimitOptions
-        {
-            MaxRequests = config.GetValue<int>("RateLimiting:MaxRequestsPerWindow", 60),
-            WindowSizeSeconds = config.GetValue<int>("RateLimiting:WindowSizeSeconds", 60),
-            EndpointLimits = config.GetSection("RateLimiting:EndpointLimits")
-                .Get<Dictionary<string, EndpointLimit>>() ?? new()
-        };
-    });
-
-    // Health Checks
-    builder.Services.AddHealthChecks()
-        .AddRedis(redisConn, name: "redis", tags: new[] { "ready" });
+    builder.Services.AddRedis(builder.Configuration);
+    builder.Services.AddDomainServices();
+    builder.Services.AddRateLimiting(builder.Configuration);
+    builder.Services.AddTelemetry(builder.Configuration);
 
     var app = builder.Build();
 
-    // Middleware Pipeline (order matters!)
     app.UseMiddleware<GlobalErrorHandlingMiddleware>();
 
     if (builder.Configuration.GetValue<bool>("RateLimiting:Enabled", true))
@@ -139,7 +65,6 @@ try
         app.UseMiddleware<RateLimitingMiddleware>();
     }
 
-    // Request Logging
     app.UseSerilogRequestLogging(options =>
     {
         options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
@@ -166,7 +91,6 @@ try
     app.UseAuthorization();
     app.MapControllers();
 
-    // Health Check Endpoints
     app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
     {
         Predicate = check => check.Tags.Contains("ready")
@@ -174,10 +98,10 @@ try
 
     app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
     {
-        Predicate = _ => false // Always healthy if the app is running
+        Predicate = _ => false
     });
 
-    app.MapGet("/health", async (IConnectionMultiplexer mux) =>
+    app.MapGet("/health", async (StackExchange.Redis.IConnectionMultiplexer mux) =>
     {
         var latency = await mux.GetDatabase().PingAsync();
         var langfuseConfigured = !string.IsNullOrEmpty(app.Configuration["LANGFUSE_PUBLIC_KEY"]);
@@ -204,7 +128,6 @@ try
             worker = "Background job processing",
             llm = "Semantic Kernel with OpenRouter",
             observability = "Langfuse LLM tracking",
-            prompt_templates = "Redis-backed versioning",
             rate_limiting = "Sliding window algorithm",
             error_handling = "Global exception middleware",
             logging = "Structured logging with Serilog"
@@ -214,35 +137,59 @@ try
             "/api/pull-requests/{owner}/{repo}/{number}",
             "/api/pull-requests/{owner}/{repo}/{number}/commits",
             "/api/analyze",
-            "/api/prompttemplate",
             "/health",
             "/swagger"
         }
     })).WithName("Info").WithOpenApi();
 
-    // Initialize default prompt templates on startup (optional)
     _ = Task.Run(async () =>
     {
         try
         {
-            await Task.Delay(5000); // Wait for services to be ready
+            await Task.Delay(5000);
             using var scope = app.Services.CreateScope();
-            var promptService = scope.ServiceProvider.GetRequiredService<IPromptTemplateService>();
+            var redis = scope.ServiceProvider.GetRequiredService<StackExchange.Redis.IConnectionMultiplexer>();
+            var db = redis.GetDatabase();
 
-            // Check if templates exist
-            var systemPrompt = await promptService.GetPromptTemplateAsync("pr_analysis_system");
-            if (systemPrompt == null)
+            var systemPrompt = await db.StringGetAsync("prompt:pr_analysis_system");
+            if (systemPrompt.IsNullOrEmpty)
             {
-                Log.Information("Initializing default prompt templates");
+                Log.Information("Initializing default system prompt");
+                await db.StringSetAsync("prompt:pr_analysis_system", @"You are an expert code reviewer analyzing a GitHub pull request. Provide a structured JSON analysis following this exact schema:
 
-                // Initialize using the controller endpoint
-                var httpClient = new HttpClient();
-                await httpClient.PostAsync("http://localhost:5000/api/prompttemplate/initialize", null);
+{
+  ""executive_summary"": [""2-6 bullet points summarizing key changes""],
+  ""change_units"": [
+    {
+      ""type"": ""feature|bugfix|refactor|test|docs|performance|security|style"",
+      ""title"": ""Short descriptive title"",
+      ""description"": ""What changed"",
+      ""inferred_intent"": ""Why it likely changed"",
+      ""confidence_level"": ""high|medium|low"",
+      ""rationale"": ""Explanation for confidence level"",
+      ""evidence"": ""Specific quote from diff"",
+      ""affected_files"": [""file paths""],
+      ""test_coverage_signal"": ""tests_added|tests_modified|no_tests""
+    }
+  ],
+  ""risks_and_concerns"": [""List of identified risks""],
+  ""claimed_vs_actual"": {
+    ""alignment_assessment"": ""aligned|partially_aligned|misaligned"",
+    ""discrepancies"": [""List of discrepancies if any""]
+  }
+}
+
+Rules:
+1. Base analysis on actual diffs, not just commit messages
+2. Every claim must include evidence from the diff
+3. Set confidence levels honestly based on evidence strength
+4. Identify ALL significant changes across ALL files
+5. Flag any potential risks or concerns");
             }
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to initialize default prompt templates");
+            Log.Warning(ex, "Failed to initialize default system prompt");
         }
     });
 

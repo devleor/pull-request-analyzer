@@ -7,7 +7,7 @@ namespace PullRequestAnalyzer.Middleware;
 /// <summary>
 /// Production-ready rate limiting middleware with sliding window algorithm
 /// </summary>
-public class RateLimitingMiddleware
+public sealed class RateLimitingMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<RateLimitingMiddleware> _logger;
@@ -81,15 +81,12 @@ public class RateLimitingMiddleware
 
     private string GetClientIdentifier(HttpContext context)
     {
-        // Try to get API key first
         if (context.Request.Headers.TryGetValue("X-API-Key", out var apiKey) && !string.IsNullOrEmpty(apiKey))
         {
             return $"apikey:{apiKey}";
         }
 
-        // Fall back to IP address
-        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        return $"ip:{ip}";
+        return "anonymous";
     }
 
     private void CleanupOldWindows()
@@ -112,7 +109,7 @@ public class RateLimitingMiddleware
     }
 }
 
-public class RateLimitOptions
+public sealed class RateLimitOptions
 {
     public int MaxRequests { get; set; } = 60;
     public int WindowSizeSeconds { get; set; } = 60;
@@ -125,7 +122,7 @@ public class RateLimitOptions
     };
 }
 
-public class EndpointLimit
+public sealed class EndpointLimit
 {
     public int MaxRequests { get; set; }
     public int WindowSizeSeconds { get; set; }
@@ -134,7 +131,7 @@ public class EndpointLimit
 /// <summary>
 /// Thread-safe sliding window implementation
 /// </summary>
-internal class SlidingWindow
+internal sealed class SlidingWindow
 {
     private readonly object _lock = new();
     private readonly Queue<DateTimeOffset> _requests = new();

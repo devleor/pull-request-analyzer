@@ -1,4 +1,4 @@
-#pragma warning disable SKEXP0010 // Suppress experimental API warnings
+#pragma warning disable SKEXP0010
 
 using System.Diagnostics;
 using System.Text;
@@ -7,29 +7,28 @@ using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
 using PullRequestAnalyzer.Models;
+using StackExchange.Redis;
 
 namespace PullRequestAnalyzer.Services;
 
-/// <summary>
-/// Production-ready Semantic Kernel Analysis Service with OpenTelemetry tracing to Langfuse
-/// </summary>
-public sealed class LlmAnalysisService : IAnalysisService
+public sealed class SemanticKernelAnalysisService : IAnalysisService
 {
     private readonly Kernel _kernel;
     private readonly IChatCompletionService _chatService;
     private readonly DiffChunkingService _chunker;
-    private readonly IPromptTemplateService _promptTemplates;
-    private readonly ILogger<LlmAnalysisService> _logger;
+    private readonly IConnectionMultiplexer _redis;
+    private readonly ILogger<SemanticKernelAnalysisService> _logger;
     private readonly string _modelName;
+    private static readonly ActivitySource ActivitySource = new("PullRequestAnalyzer", "1.0.0");
 
-    public LlmAnalysisService(
+    public SemanticKernelAnalysisService(
         DiffChunkingService chunker,
-        IPromptTemplateService promptTemplates,
+        IConnectionMultiplexer redis,
         IConfiguration config,
-        ILogger<LlmAnalysisService> logger)
+        ILogger<SemanticKernelAnalysisService> logger)
     {
         _chunker = chunker;
-        _promptTemplates = promptTemplates;
+        _redis = redis;
         _logger = logger;
 
         var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")
@@ -40,10 +39,8 @@ public sealed class LlmAnalysisService : IAnalysisService
                     ?? config["OpenRouter:Model"]
                     ?? "liquid/lfm-2.5-1.2b-instruct:free";
 
-        // Build Semantic Kernel with OpenRouter
         var builder = Kernel.CreateBuilder();
 
-        // Configure for OpenRouter (OpenAI-compatible)
         builder.AddOpenAIChatCompletion(
             modelId: _modelName,
             apiKey: apiKey,
@@ -61,7 +58,7 @@ public sealed class LlmAnalysisService : IAnalysisService
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
 
-        _logger.LogInformation("OpenTelemetry-based Semantic Kernel service initialized with model: {Model}", _modelName);
+        _logger.LogInformation("Semantic Kernel service initialized with model: {Model}", _modelName);
     }
 
     public async Task<AnalysisResult> AnalyzeAsync(PullRequestData pr)
@@ -69,22 +66,19 @@ public sealed class LlmAnalysisService : IAnalysisService
         var stopwatch = Stopwatch.StartNew();
         var correlationId = Guid.NewGuid().ToString();
 
-        // Start OpenTelemetry activity (span)
-        using var activity = TelemetryService.StartActivity(
+        using var activity = ActivitySource.StartActivity(
             $"pr_analysis.{pr.Number}",
-            ActivityKind.Internal,
-            new Dictionary<string, object?>
-            {
-                ["pr.owner"] = pr.Owner,
-                ["pr.repo"] = pr.Repo,
-                ["pr.number"] = pr.Number,
-                ["pr.title"] = pr.Title,
-                ["pr.author"] = pr.Author,
-                ["pr.file_count"] = pr.ChangedFiles.Count,
-                ["pr.commit_count"] = pr.Commits.Count,
-                ["correlation_id"] = correlationId,
-                ["llm.model"] = _modelName
-            });
+            ActivityKind.Internal);
+
+        activity?.SetTag("pr.owner", pr.Owner);
+        activity?.SetTag("pr.repo", pr.Repo);
+        activity?.SetTag("pr.number", pr.Number);
+        activity?.SetTag("pr.title", pr.Title);
+        activity?.SetTag("pr.author", pr.Author);
+        activity?.SetTag("pr.file_count", pr.ChangedFiles.Count);
+        activity?.SetTag("pr.commit_count", pr.Commits.Count);
+        activity?.SetTag("correlation_id", correlationId);
+        activity?.SetTag("llm.model", _modelName);
 
         using var scope = _logger.BeginScope(new Dictionary<string, object>
         {
@@ -98,26 +92,15 @@ public sealed class LlmAnalysisService : IAnalysisService
 
         try
         {
-            // Load prompts from Redis
-            TelemetryService.AddEvent("load_prompts.start");
+            var systemPrompt = await GetSystemPromptAsync()
+                              ?? throw new InvalidOperationException("System prompt not found in Redis");
 
-            var systemPrompt = await _promptTemplates.GetPromptTemplateAsync("pr_analysis_system")
-                              ?? throw new InvalidOperationException("System prompt 'pr_analysis_system' not found in Redis. Please initialize prompts.");
-
-            TelemetryService.AddEvent("load_prompts.complete", new Dictionary<string, object?>
-            {
-                ["system_prompt_length"] = systemPrompt.Length
-            });
-
-            // Build the PR data content
             var prDataContent = BuildPRDataContent(pr);
 
-            // Create chat history (no few-shot example)
             var chatHistory = new ChatHistory();
             chatHistory.AddSystemMessage(systemPrompt);
             chatHistory.AddUserMessage(prDataContent);
 
-            // Calculate prompt size
             var totalPromptLength = systemPrompt.Length + prDataContent.Length;
 
             activity?.SetTag("llm.prompt_tokens_estimate", totalPromptLength / 4);
@@ -127,35 +110,28 @@ public sealed class LlmAnalysisService : IAnalysisService
             _logger.LogDebug("Conversation constructed - System: {SystemLength} chars, PR Data: {DataLength} chars",
                 systemPrompt.Length, prDataContent.Length);
 
-            // Configure execution settings
             var executionSettings = new OpenAIPromptExecutionSettings
             {
                 Temperature = 0.2,
                 MaxTokens = 4096
-                // ResponseFormat = "json_object" // Not supported by all models
             };
 
-            // Create a specific span for LLM call with Langfuse-compatible format
-            using var llmSpan = TelemetryService.StartActivity(
-                "generation",  // Langfuse expects "generation" as the span name
-                ActivityKind.Client,
-                new Dictionary<string, object?>
-                {
-                    ["gen_ai.system"] = "openrouter",
-                    ["gen_ai.request.model"] = _modelName,
-                    ["gen_ai.request.temperature"] = 0.2,
-                    ["gen_ai.request.max_tokens"] = 4096,
-                    ["gen_ai.request.top_p"] = 1.0
-                });
+            using var llmSpan = ActivitySource.StartActivity(
+                "generation",
+                ActivityKind.Client);
 
-            // Build messages array for Langfuse
+            llmSpan?.SetTag("gen_ai.system", "openrouter");
+            llmSpan?.SetTag("gen_ai.request.model", _modelName);
+            llmSpan?.SetTag("gen_ai.request.temperature", 0.2);
+            llmSpan?.SetTag("gen_ai.request.max_tokens", 4096);
+            llmSpan?.SetTag("gen_ai.request.top_p", 1.0);
+
             var messages = new[]
             {
                 new { role = "system", content = systemPrompt },
                 new { role = "user", content = prDataContent }
             };
 
-            // Set input as JSON string for Langfuse
             llmSpan?.SetTag("gen_ai.prompt", JsonSerializer.Serialize(messages));
             llmSpan?.SetTag("gen_ai.usage.prompt_tokens", totalPromptLength / 4);
 
@@ -168,36 +144,23 @@ public sealed class LlmAnalysisService : IAnalysisService
             llmStopwatch.Stop();
             var rawResponse = response.Content ?? throw new InvalidOperationException("Empty response from LLM");
 
-            // Track output for Langfuse using OpenTelemetry semantic conventions
             llmSpan?.SetTag("gen_ai.completion", rawResponse);
             llmSpan?.SetTag("gen_ai.usage.completion_tokens", rawResponse.Length / 4);
             llmSpan?.SetTag("gen_ai.usage.total_tokens", (totalPromptLength + rawResponse.Length) / 4);
             llmSpan?.SetTag("gen_ai.response.finish_reasons", new[] { "stop" });
             llmSpan?.SetStatus(ActivityStatusCode.Ok);
 
-            // Calculate metrics
             var outputTokens = rawResponse.Length / 4;
             var totalTokens = (totalPromptLength + rawResponse.Length) / 4;
             var cost = EstimateCost(totalTokens, _modelName);
-
-            TelemetryService.AddEvent("llm_call.complete", new Dictionary<string, object?>
-            {
-                ["latency_ms"] = llmStopwatch.ElapsedMilliseconds,
-                ["output_tokens"] = outputTokens,
-                ["total_tokens"] = totalTokens,
-                ["cost_usd"] = cost,
-                ["response_length"] = rawResponse.Length
-            });
 
             activity?.SetTag("llm.output_tokens", outputTokens);
             activity?.SetTag("llm.total_tokens", totalTokens);
             activity?.SetTag("llm.latency_ms", llmStopwatch.ElapsedMilliseconds);
             activity?.SetTag("llm.cost_usd", cost);
 
-            // Parse the response
             var result = ParseResponse(rawResponse, pr);
 
-            // Validate response
             var actualFiles = pr.ChangedFiles.Select(f => f.Filename).ToArray();
             var validationResult = ValidateResponse(result, actualFiles, pr);
 
@@ -205,13 +168,6 @@ public sealed class LlmAnalysisService : IAnalysisService
             {
                 _logger.LogWarning("Analysis contains unverified content - Issues: {Issues}",
                     string.Join(", ", validationResult.Issues));
-
-                TelemetryService.AddEvent("validation.failed", new Dictionary<string, object?>
-                {
-                    ["issues"] = string.Join(", ", validationResult.Issues),
-                    ["issue_count"] = validationResult.Issues.Count
-                });
-
                 activity?.SetTag("validation.passed", false);
             }
             else
@@ -221,7 +177,6 @@ public sealed class LlmAnalysisService : IAnalysisService
 
             stopwatch.Stop();
 
-            // Final metrics
             activity?.SetTag("analysis.duration_ms", stopwatch.ElapsedMilliseconds);
             activity?.SetTag("analysis.change_units", result.ChangeUnits.Count);
             activity?.SetTag("analysis.confidence_score", result.ConfidenceScore);
@@ -238,27 +193,56 @@ public sealed class LlmAnalysisService : IAnalysisService
                 result.ConfidenceScore,
                 validationResult.IsValid);
 
-            TelemetryService.AddEvent("analysis.complete", new Dictionary<string, object?>
-            {
-                ["success"] = true,
-                ["duration_ms"] = stopwatch.ElapsedMilliseconds
-            });
-
             return result;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Analysis failed after {Duration}ms", stopwatch.ElapsedMilliseconds);
-
-            TelemetryService.RecordException(ex);
-            TelemetryService.AddEvent("analysis.failed", new Dictionary<string, object?>
-            {
-                ["error"] = ex.Message,
-                ["duration_ms"] = stopwatch.ElapsedMilliseconds
-            });
-
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
+    }
+
+    private async Task<string?> GetSystemPromptAsync()
+    {
+        var db = _redis.GetDatabase();
+        var value = await db.StringGetAsync("prompt:pr_analysis_system");
+
+        if (value.IsNullOrEmpty)
+        {
+            return @"You are an expert code reviewer analyzing a GitHub pull request. Provide a structured JSON analysis following this exact schema:
+
+{
+  ""executive_summary"": [""2-6 bullet points summarizing key changes""],
+  ""change_units"": [
+    {
+      ""type"": ""feature|bugfix|refactor|test|docs|performance|security|style"",
+      ""title"": ""Short descriptive title"",
+      ""description"": ""What changed"",
+      ""inferred_intent"": ""Why it likely changed"",
+      ""confidence_level"": ""high|medium|low"",
+      ""rationale"": ""Explanation for confidence level"",
+      ""evidence"": ""Specific quote from diff"",
+      ""affected_files"": [""file paths""],
+      ""test_coverage_signal"": ""tests_added|tests_modified|no_tests""
+    }
+  ],
+  ""risks_and_concerns"": [""List of identified risks""],
+  ""claimed_vs_actual"": {
+    ""alignment_assessment"": ""aligned|partially_aligned|misaligned"",
+    ""discrepancies"": [""List of discrepancies if any""]
+  }
+}
+
+Rules:
+1. Base analysis on actual diffs, not just commit messages
+2. Every claim must include evidence from the diff
+3. Set confidence levels honestly based on evidence strength
+4. Identify ALL significant changes across ALL files
+5. Flag any potential risks or concerns";
+        }
+
+        return value.ToString();
     }
 
     private string BuildPRDataContent(PullRequestData pr)
@@ -291,7 +275,6 @@ public sealed class LlmAnalysisService : IAnalysisService
         return content.ToString();
     }
 
-
     private static double EstimateCost(int tokens, string model)
     {
         var costPer1MTokens = model switch
@@ -310,7 +293,6 @@ public sealed class LlmAnalysisService : IAnalysisService
     {
         try
         {
-            // Clean the response if wrapped in markdown
             var jsonString = rawResponse;
             if (rawResponse.Contains("```json"))
             {
@@ -341,12 +323,10 @@ public sealed class LlmAnalysisService : IAnalysisService
             var result = JsonSerializer.Deserialize<AnalysisResult>(jsonString, options)
                         ?? throw new InvalidOperationException("Failed to deserialize analysis result");
 
-            // Set metadata
             result.AnalysisTimestamp = DateTime.UtcNow;
             result.PrNumber = pr.Number;
             result.PrTitle = pr.Title;
 
-            // Calculate confidence score
             if (result.ChangeUnits.Any())
             {
                 var confidenceMap = new Dictionary<string, double>
@@ -380,7 +360,6 @@ public sealed class LlmAnalysisService : IAnalysisService
     {
         var issues = new List<string>();
 
-        // Check if referenced files exist
         foreach (var changeUnit in result.ChangeUnits)
         {
             foreach (var file in changeUnit.AffectedFiles)
@@ -392,7 +371,6 @@ public sealed class LlmAnalysisService : IAnalysisService
             }
         }
 
-        // Check coverage
         var referencedFiles = result.ChangeUnits
             .SelectMany(cu => cu.AffectedFiles)
             .Distinct(StringComparer.OrdinalIgnoreCase)

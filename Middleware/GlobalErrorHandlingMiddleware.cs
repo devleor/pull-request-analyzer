@@ -6,7 +6,7 @@ namespace PullRequestAnalyzer.Middleware;
 /// <summary>
 /// Global error handling middleware for production-ready error responses
 /// </summary>
-public class GlobalErrorHandlingMiddleware
+public sealed class GlobalErrorHandlingMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<GlobalErrorHandlingMiddleware> _logger;
