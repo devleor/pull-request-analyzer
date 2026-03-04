@@ -168,7 +168,7 @@ try
       ""confidence_level"": ""high|medium|low"",
       ""rationale"": ""Explanation for confidence level"",
       ""evidence"": ""Specific quote from diff"",
-      ""affected_files"": [""file paths""],
+      ""affected_files"": [""MUST list the actual file paths from the PR""],
       ""test_coverage_signal"": ""tests_added|tests_modified|no_tests""
     }
   ],
@@ -179,12 +179,14 @@ try
   }
 }
 
-Rules:
+IMPORTANT Rules:
 1. Base analysis on actual diffs, not just commit messages
 2. Every claim must include evidence from the diff
 3. Set confidence levels honestly based on evidence strength
 4. Identify ALL significant changes across ALL files
-5. Flag any potential risks or concerns");
+5. For each change_unit, MUST populate affected_files with the actual file paths shown in the PR (files are listed in ""Files Changed in this PR"" section)
+6. Extract file paths from the file list provided at the beginning of the PR data
+7. Flag any potential risks or concerns");
             }
         }
         catch (Exception ex)

@@ -121,8 +121,8 @@ if [ $? -eq 0 ] && [ -n "$COMMITS_DATA" ]; then
         # Show first 10 commits
         echo "$COMMITS_DATA" | jq -r '.[:10][] |
             "  [\(.sha[0:7])] \(.message | split("\n")[0] | .[0:60])\(if (. | length) > 60 then "..." else "" end)
-    Author: \(.author)
-    Files: \(.files | length)"' | while IFS= read -r line; do
+    Author: \(.author // "unknown")
+    Files: \(.files // [] | length)"' | while IFS= read -r line; do
             if [[ "$line" == "  ["* ]]; then
                 echo -e "${BOLD}$line${NC}"
             else
@@ -277,6 +277,14 @@ if [ $? -eq 0 ] && [ -n "$ANALYSIS_RESULT" ]; then
         echo "$ANALYSIS_RESULT" | jq '.' > "$FILENAME"
         echo ""
         echo -e "${GREEN}Full analysis saved to: $FILENAME${NC}"
+
+        # Show complete JSON response
+        echo ""
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║                    COMPLETE JSON RESPONSE                       ║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo "$ANALYSIS_RESULT" | jq '.'
     else
         echo -e "${RED}✗ Unexpected response format${NC}"
         echo "$ANALYSIS_RESULT" | jq '.'

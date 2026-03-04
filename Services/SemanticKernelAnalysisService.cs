@@ -107,6 +107,10 @@ public sealed class SemanticKernelAnalysisService : IAnalysisService
             activity?.SetTag("llm.max_tokens", 4096);
             activity?.SetTag("llm.temperature", 0.2);
 
+            _logger.LogInformation("PR has {FileCount} files: {FileList}",
+                pr.ChangedFiles.Count,
+                string.Join(", ", pr.ChangedFiles.Take(5).Select(f => f.Filename)));
+
             _logger.LogDebug("Conversation constructed - System: {SystemLength} chars, PR Data: {DataLength} chars",
                 systemPrompt.Length, prDataContent.Length);
 
@@ -223,7 +227,7 @@ public sealed class SemanticKernelAnalysisService : IAnalysisService
       ""confidence_level"": ""high|medium|low"",
       ""rationale"": ""Explanation for confidence level"",
       ""evidence"": ""Specific quote from diff"",
-      ""affected_files"": [""file paths""],
+      ""affected_files"": [""MUST list the actual file paths from the PR""],
       ""test_coverage_signal"": ""tests_added|tests_modified|no_tests""
     }
   ],
@@ -234,12 +238,14 @@ public sealed class SemanticKernelAnalysisService : IAnalysisService
   }
 }
 
-Rules:
+IMPORTANT Rules:
 1. Base analysis on actual diffs, not just commit messages
 2. Every claim must include evidence from the diff
 3. Set confidence levels honestly based on evidence strength
 4. Identify ALL significant changes across ALL files
-5. Flag any potential risks or concerns";
+5. For each change_unit, MUST populate affected_files with the actual file paths shown in the PR (e.g., ""mindsdb/integrations/handlers/pocketbase/pocketbase_handler.py"")
+6. Extract file paths from the ""--- filename (status) ---"" headers in the file changes section
+7. Flag any potential risks or concerns";
         }
 
         return value.ToString();
@@ -254,6 +260,14 @@ Rules:
         content.AppendLine($"Author: {pr.Author}");
         content.AppendLine($"Description: {pr.Description ?? "No description provided"}");
         content.AppendLine();
+
+        content.AppendLine("Files Changed in this PR:");
+        foreach (var file in pr.ChangedFiles)
+        {
+            content.AppendLine($"- {file.Filename} ({file.Status})");
+        }
+        content.AppendLine();
+
         content.AppendLine("Commits:");
         foreach (var commit in pr.Commits.Take(20))
         {
@@ -264,11 +278,12 @@ Rules:
             content.AppendLine($"... and {pr.Commits.Count - 20} more commits");
         }
         content.AppendLine();
-        content.AppendLine("File Changes:");
+
+        content.AppendLine("Detailed File Changes with Diffs:");
         foreach (var file in pr.ChangedFiles)
         {
             var truncatedPatch = _chunker.TruncatePatch(file.Patch, 2000);
-            content.AppendLine($"\n--- {file.Filename} ({file.Status}) ---");
+            content.AppendLine($"\n=== FILE: {file.Filename} (STATUS: {file.Status}) ===");
             content.AppendLine(truncatedPatch);
         }
 
