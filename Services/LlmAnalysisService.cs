@@ -104,27 +104,21 @@ public sealed class LlmAnalysisService : IAnalysisService
             var systemPrompt = await _promptTemplates.GetPromptTemplateAsync("pr_analysis_system")
                               ?? throw new InvalidOperationException("System prompt 'pr_analysis_system' not found in Redis. Please initialize prompts.");
 
-            var fewShotPrompt = await _promptTemplates.GetPromptTemplateAsync("pr_analysis_fewshot")
-                               ?? GetDefaultFewShotExample();
-
             TelemetryService.AddEvent("load_prompts.complete", new Dictionary<string, object?>
             {
-                ["system_prompt_length"] = systemPrompt.Length,
-                ["fewshot_prompt_length"] = fewShotPrompt.Length
+                ["system_prompt_length"] = systemPrompt.Length
             });
 
             // Build the PR data content
             var prDataContent = BuildPRDataContent(pr);
 
-            // Create chat history
+            // Create chat history (no few-shot example)
             var chatHistory = new ChatHistory();
             chatHistory.AddSystemMessage(systemPrompt);
-            chatHistory.AddUserMessage(fewShotPrompt);
-            chatHistory.AddAssistantMessage("Understood. I will follow this format and ground my analysis in the actual diffs.");
             chatHistory.AddUserMessage(prDataContent);
 
             // Calculate prompt size
-            var totalPromptLength = systemPrompt.Length + fewShotPrompt.Length + prDataContent.Length;
+            var totalPromptLength = systemPrompt.Length + prDataContent.Length;
 
             activity?.SetTag("llm.prompt_tokens_estimate", totalPromptLength / 4);
             activity?.SetTag("llm.max_tokens", 4096);
@@ -158,8 +152,6 @@ public sealed class LlmAnalysisService : IAnalysisService
             var messages = new[]
             {
                 new { role = "system", content = systemPrompt },
-                new { role = "user", content = fewShotPrompt },
-                new { role = "assistant", content = "Understood. I will follow this format and ground my analysis in the actual diffs." },
                 new { role = "user", content = prDataContent }
             };
 
@@ -299,37 +291,6 @@ public sealed class LlmAnalysisService : IAnalysisService
         return content.ToString();
     }
 
-    private string GetDefaultFewShotExample()
-    {
-        return """
-            Example PR: "Fix authentication bug in login endpoint"
-            Files: auth/login.py with diff showing null check added
-
-            Expected JSON response:
-            {
-              "executive_summary": [
-                "Added null check to prevent authentication bypass",
-                "Fixes critical security vulnerability in login endpoint"
-              ],
-              "change_units": [{
-                "type": "bugfix",
-                "title": "Fix null user authentication bypass",
-                "description": "Added validation to check if user object is null before authentication",
-                "inferred_intent": "Prevent authentication bypass when user is null",
-                "confidence_level": "high",
-                "evidence": "if user is None: return unauthorized()",
-                "rationale": "Direct evidence of null check in diff at line 45",
-                "affected_files": ["auth/login.py"],
-                "test_coverage_signal": "none"
-              }],
-              "risks_and_concerns": ["No tests added for this security fix"],
-              "claimed_vs_actual": {
-                "alignment_assessment": "aligned",
-                "discrepancies": []
-              }
-            }
-            """;
-    }
 
     private static double EstimateCost(int tokens, string model)
     {

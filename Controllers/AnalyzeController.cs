@@ -70,18 +70,7 @@ public sealed class AnalyzeController : ControllerBase
 
             var stopwatch = Stopwatch.StartNew();
 
-            // Check cache first
-            var cached = await _cache.GetAnalysisAsync<AnalysisResult>(
-                pullRequest.Owner, pullRequest.Repo, pullRequest.Number);
-
-            if (cached != null)
-            {
-                _logger.LogInformation("Returning cached analysis for PR {Owner}/{Repo}#{Number}",
-                    pullRequest.Owner, pullRequest.Repo, pullRequest.Number);
-                return Ok(cached);
-            }
-
-            // Perform the FULL analysis (same as async version)
+            // Perform the FULL analysis (always fresh, no caching)
             _logger.LogInformation("Performing full LLM analysis for PR {Owner}/{Repo}#{Number}",
                 pullRequest.Owner, pullRequest.Repo, pullRequest.Number);
 
@@ -92,10 +81,6 @@ public sealed class AnalyzeController : ControllerBase
                 "Change units: {ChangeUnits}, Confidence: {Confidence}, Alignment: {Alignment}",
                 pullRequest.Owner, pullRequest.Repo, pullRequest.Number, stopwatch.ElapsedMilliseconds,
                 result.ChangeUnits.Count, result.ConfidenceScore, result.ClaimedVsActual.AlignmentAssessment);
-
-            // Cache the result
-            await _cache.SetAnalysisAsync(
-                pullRequest.Owner, pullRequest.Repo, pullRequest.Number, result);
 
             return Ok(result);
         }

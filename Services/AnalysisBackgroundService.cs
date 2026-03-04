@@ -77,11 +77,8 @@ public sealed class AnalysisBackgroundService : BackgroundService
 
             try
             {
-                var cached = await _cache.GetAnalysisAsync<AnalysisResult>(pr.Owner, pr.Repo, pr.Number);
+                var result = await analysis.AnalyzeAsync(pr);
 
-                var result = cached ?? await analysis.AnalyzeAsync(pr);
-
-                await _cache.SetAnalysisAsync(pr.Owner, pr.Repo, pr.Number, result);
                 await SetStatusAsync(cmd.JobId, "completed", pr.Number, result: result);
                 await _queue.AcknowledgeAsync(msgId);
 
