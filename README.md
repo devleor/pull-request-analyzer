@@ -126,42 +126,6 @@ curl -X POST http://localhost:5000/api/analyze \
   }'
 ```
 
-## 🧠 Production Features
-
-### 1. LLM Observability with Langfuse
-- **Token Tracking**: Monitor usage per request
-- **Latency Metrics**: Track response times (~3-15s typical)
-- **Cost Analysis**: Calculate costs per analysis (~$0.008 per PR)
-- **OpenTelemetry Integration**: Full distributed tracing
-
-### 2. Anti-Hallucination Measures
-```csharp
-// Evidence-based validation
-- Every claim must cite specific diff lines
-- File existence verification
-- Confidence levels with explicit rationale
-- Missing file detection and warnings
-```
-
-### 3. Rate Limiting
-- Sliding window algorithm (30 requests/minute default)
-- Per-IP tracking with distributed Redis backing
-- Configurable via environment variables
-
-### 4. Caching Strategy
-| Data Type | TTL | Purpose |
-|-----------|-----|---------|
-| PR Data | 1 hour | GitHub API responses |
-| Commits | 1 hour | Commit history |
-| System Prompts | Never expires | LLM system prompts |
-| Analysis Results | Not cached | Always fresh analysis |
-
-### 5. Error Handling & Resilience
-- Structured logging with Serilog
-- Correlation IDs for request tracing
-- Graceful degradation on service failures
-- Health checks with detailed status
-
 ## 🛠️ Technology Stack
 
 ### Core Technologies
