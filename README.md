@@ -173,28 +173,6 @@ curl -X POST http://localhost:5000/api/analyze \
 - **GitHub Integration**: Octokit.NET 14.0.0
 - **Containerization**: Docker & Docker Compose
 
-### Key Production Components
-- **TelemetryService**: OpenTelemetry configuration for Langfuse
-- **LlmAnalysisService**: Semantic Kernel integration with tracing
-- **JobQueueService**: Redis Streams for async processing
-- **DistributedLockService**: RedLock for distributed coordination
-- **PromptTemplateService**: Versioned prompt management in Redis
-
-## 📊 Performance Metrics
-
-### Analysis Performance
-| PR Size | Files | Time | Tokens | Cost |
-|---------|-------|------|--------|------|
-| Small | <10 | 3-5s | ~5K | ~$0.005 |
-| Medium | 10-50 | 5-15s | ~10K | ~$0.010 |
-| Large | >50 | 15-45s | ~20K | ~$0.020 |
-
-### System Performance
-- **Cache Hit**: <100ms response time
-- **Cold Start**: ~3s for first analysis
-- **Concurrent Jobs**: 10 parallel analyses
-- **Redis Memory**: ~100MB for typical usage
-
 ## 🧪 Testing
 
 ### Comprehensive Test Script
@@ -264,42 +242,5 @@ pull-request-analyzer/
 ├── Dockerfile                       # Multi-stage build
 └── Program.cs                       # DI configuration
 ```
-
-## 🔍 Observability Dashboard
-
-![Langfuse Dashboard](docs/langfuse.png)
-
-Access Langfuse dashboard to monitor:
-- **Token Usage**: Track consumption per model
-- **Latency Distribution**: P50, P95, P99 metrics
-- **Cost Analysis**: Real-time cost tracking
-- **Error Rates**: Failed analyses and retries
-- **Trace Details**: Full request/response pairs
-
-## 🚢 Production Deployment Checklist
-
-- [x] Rate limiting implemented
-- [x] Distributed caching with Redis
-- [x] Async job processing
-- [x] OpenTelemetry tracing
-- [x] Structured logging
-- [x] Health checks
-- [x] Graceful shutdown
-- [x] Docker containerization
-- [x] Environment-based configuration
-- [x] Anti-hallucination validation
-- [x] Webhook notifications
-- [x] Prompt versioning
-
-## 📈 Key Metrics Achieved
-
-- **Accuracy**: 91% confidence score average
-- **Performance**: 3-15s analysis time
-- **Reliability**: Zero hardcoded responses
-- **Observability**: 100% request tracing
-- **Cost Efficiency**: ~$0.01 per PR analysis
-- **Scale**: Handles 30 requests/minute
-
----
 
 **Built as a production-ready take-home assignment demonstrating enterprise-grade AI integration with focus on observability, accuracy, and scalability.**
