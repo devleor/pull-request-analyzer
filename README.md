@@ -4,14 +4,6 @@
 
 A take-home assignment demonstrating enterprise-grade implementation of an LLM-powered GitHub pull request analyzer with full observability, anti-hallucination measures, and production features.
 
-## 🎯 Core Value Proposition
-
-Provides structured, evidence-based analysis of pull request changes by:
-- Analyzing actual code diffs with anti-hallucination validation
-- Tracking LLM costs, latency, and token usage via Langfuse
-- Supporting both synchronous and asynchronous analysis modes
-- Implementing production-grade rate limiting and error handling
-
 ## 🏗️ Architecture
 
 ```mermaid
@@ -143,12 +135,6 @@ curl -X POST http://localhost:5000/api/analyze \
 ```bash
 # Test MindsDB PR #11944 (PocketBase Handler)
 ./test-pr-11944.sh
-
-# Test all endpoints
-./test-all-endpoints.sh
-
-# Test fresh analysis (no cache)
-./test-fresh-analysis.sh
 ```
 
 ### Sample Output Structure
@@ -181,30 +167,6 @@ curl -X POST http://localhost:5000/api/analyze \
     "discrepancies": []
   }
 }
-```
-
-## 📁 Project Structure
-
-```
-pull-request-analyzer/
-├── Controllers/
-│   ├── AnalyzeController.cs         # Main analysis endpoint
-│   └── PullRequestController.cs     # GitHub data fetching
-├── Services/
-│   ├── LlmAnalysisService.cs       # Semantic Kernel + LLM
-│   ├── TelemetryService.cs         # OpenTelemetry/Langfuse
-│   ├── GitHubIngestService.cs      # GitHub API client
-│   ├── RedisCacheService.cs        # Caching layer
-│   ├── JobQueueService.cs          # Async job queue
-│   ├── AnalysisBackgroundService.cs # Background worker
-│   ├── PromptTemplateService.cs    # Prompt management
-│   └── DistributedLockService.cs   # Redis locking
-├── Models/
-│   ├── AnalysisResult.cs           # Analysis DTOs
-│   └── PullRequestData.cs          # GitHub models
-├── docker-compose.yml               # Container orchestration
-├── Dockerfile                       # Multi-stage build
-└── Program.cs                       # DI configuration
 ```
 
 **Built as a production-ready take-home assignment demonstrating enterprise-grade AI integration with focus on observability, accuracy, and scalability.**
