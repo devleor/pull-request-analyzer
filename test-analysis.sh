@@ -19,12 +19,13 @@ echo ""
 # Save PR data to file
 echo "$PR_DATA" > test_pr.json
 
-# Trigger analysis
-echo "2. Triggering async analysis..."
-RESPONSE=$(curl -s -X POST http://localhost:5000/api/v2/analyze-async \
+# Trigger analysis (using /api/analyze with webhook for async)
+echo "2. Triggering analysis..."
+RESPONSE=$(curl -s -X POST http://localhost:5000/api/analyze \
   -H "Content-Type: application/json" \
   -d "{
-    \"pull_request_data\": $PR_DATA
+    \"pull_request_data\": $PR_DATA,
+    \"webhook_url\": \"http://localhost:5000/api/webhook-test\"
   }")
 
 JOB_ID=$(echo "$RESPONSE" | jq -r '.job_id')

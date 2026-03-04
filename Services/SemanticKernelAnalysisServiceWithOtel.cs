@@ -123,6 +123,11 @@ public sealed class SemanticKernelAnalysisServiceWithOtel : IAnalysisService
             chatHistory.AddAssistantMessage("Understood. I will follow this format and ground my analysis in the actual diffs.");
             chatHistory.AddUserMessage(prDataContent);
 
+            // Track prompts for Langfuse as tags on the activity
+            activity?.SetTag("llm.system_prompt", systemPrompt);
+            activity?.SetTag("llm.user_prompt", prDataContent);
+            activity?.SetTag("llm.few_shot", fewShotPrompt);
+
             // Calculate prompt size
             var totalPromptLength = systemPrompt.Length + fewShotPrompt.Length + prDataContent.Length;
 
@@ -157,6 +162,9 @@ public sealed class SemanticKernelAnalysisServiceWithOtel : IAnalysisService
 
             llmStopwatch.Stop();
             var rawResponse = response.Content ?? throw new InvalidOperationException("Empty response from LLM");
+
+            // Track LLM response for Langfuse as tag
+            activity?.SetTag("llm.response", rawResponse);
 
             // Calculate metrics
             var outputTokens = rawResponse.Length / 4;
