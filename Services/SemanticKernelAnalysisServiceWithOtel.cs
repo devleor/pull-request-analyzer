@@ -123,11 +123,6 @@ public sealed class SemanticKernelAnalysisServiceWithOtel : IAnalysisService
             chatHistory.AddAssistantMessage("Understood. I will follow this format and ground my analysis in the actual diffs.");
             chatHistory.AddUserMessage(prDataContent);
 
-            // Track prompts for Langfuse as tags on the activity
-            activity?.SetTag("llm.system_prompt", systemPrompt);
-            activity?.SetTag("llm.user_prompt", prDataContent);
-            activity?.SetTag("llm.few_shot", fewShotPrompt);
-
             // Calculate prompt size
             var totalPromptLength = systemPrompt.Length + fewShotPrompt.Length + prDataContent.Length;
 
@@ -146,13 +141,31 @@ public sealed class SemanticKernelAnalysisServiceWithOtel : IAnalysisService
                 // ResponseFormat = "json_object" // Not supported by all models
             };
 
-            // Call LLM
-            TelemetryService.AddEvent("llm_call.start", new Dictionary<string, object?>
+            // Create a specific span for LLM call with Langfuse-compatible format
+            using var llmSpan = TelemetryService.StartActivity(
+                "generation",  // Langfuse expects "generation" as the span name
+                ActivityKind.Client,
+                new Dictionary<string, object?>
+                {
+                    ["gen_ai.system"] = "openrouter",
+                    ["gen_ai.request.model"] = _modelName,
+                    ["gen_ai.request.temperature"] = 0.2,
+                    ["gen_ai.request.max_tokens"] = 4096,
+                    ["gen_ai.request.top_p"] = 1.0
+                });
+
+            // Build messages array for Langfuse
+            var messages = new[]
             {
-                ["model"] = _modelName,
-                ["temperature"] = 0.2,
-                ["max_tokens"] = 4096
-            });
+                new { role = "system", content = systemPrompt },
+                new { role = "user", content = fewShotPrompt },
+                new { role = "assistant", content = "Understood. I will follow this format and ground my analysis in the actual diffs." },
+                new { role = "user", content = prDataContent }
+            };
+
+            // Set input as JSON string for Langfuse
+            llmSpan?.SetTag("gen_ai.prompt", JsonSerializer.Serialize(messages));
+            llmSpan?.SetTag("gen_ai.usage.prompt_tokens", totalPromptLength / 4);
 
             var llmStopwatch = Stopwatch.StartNew();
             var response = await _chatService.GetChatMessageContentAsync(
@@ -163,8 +176,12 @@ public sealed class SemanticKernelAnalysisServiceWithOtel : IAnalysisService
             llmStopwatch.Stop();
             var rawResponse = response.Content ?? throw new InvalidOperationException("Empty response from LLM");
 
-            // Track LLM response for Langfuse as tag
-            activity?.SetTag("llm.response", rawResponse);
+            // Track output for Langfuse using OpenTelemetry semantic conventions
+            llmSpan?.SetTag("gen_ai.completion", rawResponse);
+            llmSpan?.SetTag("gen_ai.usage.completion_tokens", rawResponse.Length / 4);
+            llmSpan?.SetTag("gen_ai.usage.total_tokens", (totalPromptLength + rawResponse.Length) / 4);
+            llmSpan?.SetTag("gen_ai.response.finish_reasons", new[] { "stop" });
+            llmSpan?.SetStatus(ActivityStatusCode.Ok);
 
             // Calculate metrics
             var outputTokens = rawResponse.Length / 4;
