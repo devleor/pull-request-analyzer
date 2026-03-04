@@ -62,7 +62,7 @@ docker-rebuild: docker-down docker-up ## Restart Docker services
 
 .PHONY: dev start stop restart watch run
 
-dev: ## Start everything in Docker (Redis + Phoenix + API with Worker)
+dev: ## Start everything in Docker (Redis + API with Worker)
 	@echo "$(BLUE)Starting Pull Request Analyzer...$(NC)"
 	@echo ""
 	@echo "$(YELLOW)► Building and starting all services...$(NC)"
@@ -71,11 +71,6 @@ dev: ## Start everything in Docker (Redis + Phoenix + API with Worker)
 	@echo "$(YELLOW)► Waiting for Redis...$(NC)"
 	@until docker-compose -f $(COMPOSE) exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; do \
 		printf "."; sleep 1; \
-	done
-	@echo " $(GREEN)ready$(NC)"
-	@echo "$(YELLOW)► Waiting for Phoenix...$(NC)"
-	@until curl -sf http://localhost:6006/healthz 2>/dev/null | grep -q OK; do \
-		printf "."; sleep 2; \
 	done
 	@echo " $(GREEN)ready$(NC)"
 	@echo "$(YELLOW)► Waiting for API...$(NC)"
@@ -87,8 +82,6 @@ dev: ## Start everything in Docker (Redis + Phoenix + API with Worker)
 	@echo "$(GREEN)✓ All services running in Docker:$(NC)"
 	@echo "$(GREEN)  Redis              → localhost:6379$(NC)"
 	@echo "$(GREEN)  Redis Commander    → http://localhost:8081$(NC)"
-	@echo "$(GREEN)  Phoenix UI         → http://localhost:6006$(NC)"
-	@echo "$(GREEN)  OTLP gRPC          → localhost:4317$(NC)"
 	@echo "$(GREEN)  API + Swagger      → http://localhost:5000/swagger$(NC)"
 	@echo "$(GREEN)  Health             → http://localhost:5000/health$(NC)"
 	@echo ""
@@ -140,12 +133,10 @@ info: ## Show project info
 	@echo "$(BLUE).NET:$(NC)    $$($(DOTNET) --version)"
 	@echo ""
 	@echo "$(BLUE)Services:$(NC)"
-	@echo "  Redis           localhost:6379
+	@echo "  Redis           localhost:6379"
 	@echo "  Redis UI        http://localhost:8081"
-	@echo "  Phoenix UI      http://localhost:6006"
-	@echo "  OTLP gRPC       localhost:4317"
 	@echo "  API             http://localhost:5000"
-	@echo "  Swagger         http://localhost:5000/swagger""
+	@echo "  Swagger         http://localhost:5000/swagger"
 
 status: docker-ps ## Show Docker container status
 

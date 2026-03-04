@@ -272,7 +272,6 @@ services:
   api:         # ASP.NET Core application
   redis:       # Redis server
   redis-ui:    # Redis Commander (dev only)
-  phoenix:     # Arize Phoenix (optional observability)
 ```
 
 ## Performance Characteristics

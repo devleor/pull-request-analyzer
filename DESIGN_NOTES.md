@@ -102,7 +102,7 @@ Large PRs (like the MindsDB example commit with 29 files) present a context wind
 **Medium term:**
 - Multi-pass analysis for large PRs: analyze files in batches, then synthesize a final summary.
 - Streaming LLM responses to reduce perceived latency on large PRs.
-- Structured logging with OpenTelemetry for observability.
+- Structured logging for observability.
 
 **Long term:**
 - Extract the worker into a separate container for independent scaling.
