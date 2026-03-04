@@ -1,0 +1,71 @@
+{
+  "pr_number": 11944,
+  "pr_title": "Pocketbase handler",
+  "analysis_timestamp": "2026-03-04T13:57:10.9221295Z",
+  "confidence_score": 0.9499999999999998,
+  "executive_summary": [
+    "- Added PocketBase handler to integrate with MindsDB via REST API.",
+    "- Enables querying PocketBase collections using MindsDB SQL syntax.",
+    "- Includes authentication, table creation, and CRUD operations.",
+    "- Updates documentation and environment variables for better integration.",
+    "- Adds support for PocketBase collections in tests and integration flows."
+  ],
+  "change_units": [
+    {
+      "id": "38792259-4ea6-42b2-aae1-3d30f3c29439",
+      "type": "feature",
+      "title": "PocketBase Handler",
+      "description": "Adds a new PocketBase integration to MindsDB for querying collections.",
+      "inferred_intent": "Non-breaking change to add new functionality",
+      "confidence_level": "high",
+      "rationale": "",
+      "evidence": "Commit #1675 - additional test for mysql api",
+      "test_coverage_signal": "",
+      "affected_files": [
+        "docs/integrations/data-integrations/datastax.mdx",
+        "mindsdb/api/executor/sql_query/steps/insert_step.py",
+        "mindsdb/integrations/handlers/pocketbase_handler/README.md",
+        "mindsdb/integrations/handlers/pocketbase_handler/pocketbase_table.py"
+      ]
+    },
+    {
+      "id": "3a47b96e-11cb-48ba-886e-569a6ba25dc6",
+      "type": "fix",
+      "title": "Mocks and Fixes",
+      "description": "Fixes issues in the integration and adds support for MSSQL conversion.",
+      "inferred_intent": "Non-breaking change to fix existing issues",
+      "confidence_level": "high",
+      "rationale": "",
+      "evidence": "Commit #11873 - Fixes #, Breaking change",
+      "test_coverage_signal": "",
+      "affected_files": [
+        "mindsdb/api/executor/sql_query/steps/insert_step.py",
+        "mindsdb/integrations/handlers/pocketbase_handler/README.md"
+      ]
+    },
+    {
+      "id": "62bfee16-2b62-4a0a-a93d-808c47237d06",
+      "type": "documentation",
+      "title": "Updated Documentation",
+      "description": "Updated documentation for environment variables and connection parameters.",
+      "inferred_intent": "Non-breaking change to improve maintainability",
+      "confidence_level": "high",
+      "rationale": "",
+      "evidence": "Commit #11667 - Updated documentation for ENV Variables",
+      "test_coverage_signal": "",
+      "affected_files": [
+        "docs/setup/environment-vars.mdx",
+        "mindsdb/integrations/handlers/pocketbase_handler/README.md"
+      ]
+    }
+  ],
+  "risks_and_concerns": [
+    "Potential issues with PocketBase authentication and connection handling.",
+    "Ensuring compatibility with different MSSQL versions and configurations.",
+    "Risk of exposing sensitive credentials in version control."
+  ],
+  "claimed_vs_actual": {
+    "alignment_assessment": "aligned",
+    "discrepancies": []
+  }
+}

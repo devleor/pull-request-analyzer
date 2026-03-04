@@ -92,10 +92,14 @@ public static class ServiceCollectionExtensions
                     .SetSampler(new AlwaysOnSampler())
                     .AddOtlpExporter(options =>
                     {
+                        var publicKey = Environment.GetEnvironmentVariable("LANGFUSE_PUBLIC_KEY");
+                        var secretKey = Environment.GetEnvironmentVariable("LANGFUSE_SECRET_KEY");
+                        var credentials = Convert.ToBase64String(
+                            System.Text.Encoding.UTF8.GetBytes($"{publicKey}:{secretKey}"));
+
                         options.Endpoint = new Uri($"{langfuseHost}/api/public/otel/v1/traces");
                         options.Protocol = OtlpExportProtocol.HttpProtobuf;
-                        options.Headers = $"x-langfuse-public-key={Environment.GetEnvironmentVariable("LANGFUSE_PUBLIC_KEY")}, " +
-                                        $"x-langfuse-secret-key={Environment.GetEnvironmentVariable("LANGFUSE_SECRET_KEY")}";
+                        options.Headers = $"Authorization=Basic {credentials}";
                     });
             });
 
