@@ -82,8 +82,8 @@ try
 
     // Core Services
     builder.Services.AddSingleton<RedisCacheService>();
-    builder.Services.AddSingleton<RedisJobQueue>();
-    builder.Services.AddSingleton<RedLockService>();
+    builder.Services.AddSingleton<JobQueueService>();
+    builder.Services.AddSingleton<DistributedLockService>();
     builder.Services.AddSingleton<DiffChunkingService>();
 
     // Prompt Template Service
@@ -98,19 +98,19 @@ try
 
     if (langfuseEnabled)
     {
-        builder.Services.AddScoped<IAnalysisService, SemanticKernelAnalysisServiceWithOtel>();
+        builder.Services.AddScoped<IAnalysisService, LlmAnalysisService>();
         Log.Information("Using OpenTelemetry-based analysis service with Langfuse export");
     }
     else
     {
-        builder.Services.AddScoped<IAnalysisService, SemanticKernelAnalysisService>();
+        builder.Services.AddScoped<IAnalysisService, LlmAnalysisService>();
         Log.Warning("Langfuse not configured - using standard analysis service");
     }
 
     builder.Services.AddScoped<WebhookService>();
 
     // Background Worker
-    builder.Services.AddHostedService<RedisBackgroundWorker>();
+    builder.Services.AddHostedService<AnalysisBackgroundService>();
 
     // Rate Limiting Configuration
     builder.Services.AddSingleton(provider =>

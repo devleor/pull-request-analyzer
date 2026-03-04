@@ -97,7 +97,8 @@ public static class TelemetryService
                 // Console exporter removed - use Langfuse dashboard for debugging
             });
 
-        Console.WriteLine($"OpenTelemetry configured with Langfuse export to: {langfuseEndpoint}");
+        var finalEndpoint = langfuseEndpoint.TrimEnd('/') + "/v1/traces";
+        Console.WriteLine($"OpenTelemetry configured with Langfuse export to: {finalEndpoint}");
     }
 
     private static void ConfigureLocalOnlyTelemetry(WebApplicationBuilder builder)

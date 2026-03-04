@@ -24,7 +24,7 @@ The Pull Request Analyzer is a production-ready microservice that analyzes GitHu
 │                          │                                       │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ Background Worker (IHostedService)                         │ │
-│  │ • RedisBackgroundWorker - Processes async jobs             │ │
+│  │ • AnalysisBackgroundService - Processes async jobs         │ │
 │  │ • Consumes from Redis Streams                              │ │
 │  │ • Sends webhook notifications                              │ │
 │  └────────────────────────────────────────────────────────────┘ │
@@ -73,7 +73,7 @@ AsyncAnalysisController
 
 #### Core Analysis Service
 ```csharp
-SemanticKernelAnalysisService : IAnalysisService
+LlmAnalysisService : IAnalysisService
 ├── Semantic Kernel Integration
 │   ├── OpenAI-compatible connector
 │   ├── Chat completion with history
@@ -99,12 +99,12 @@ RedisCacheService
 ├── PR data caching (1h TTL)
 └── Job status tracking (7d TTL)
 
-RedisJobQueue
+JobQueueService
 ├── Redis Streams for job queue
 ├── Message acknowledgment
 └── Dead letter queue handling
 
-RedisBackgroundWorker : BackgroundService
+AnalysisBackgroundService : BackgroundService
 ├── Continuous job processing
 ├── Distributed locking (RedLock)
 └── Webhook delivery on completion
@@ -119,7 +119,7 @@ WebhookService
 ```
 1. Client → POST /api/analyze
 2. Controller → Check Redis Cache
-3. [Cache Miss] → SemanticKernelAnalysisService
+3. [Cache Miss] → LlmAnalysisService
 4. Service → Build prompt with PR data
 5. Semantic Kernel → OpenRouter API (LLM)
 6. LLM Response → Validation Pipeline
@@ -135,7 +135,7 @@ WebhookService
 4. BackgroundWorker → Poll Redis Stream
 5. Worker → Acquire RedLock for PR
 6. Worker → Check Cache
-7. [Cache Miss] → SemanticKernelAnalysisService
+7. [Cache Miss] → LlmAnalysisService
 8. Service → LLM Analysis (same as sync)
 9. Worker → Cache Result
 10. Worker → Update Job Status

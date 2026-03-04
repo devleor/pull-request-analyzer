@@ -424,7 +424,7 @@ docker exec -it pull-request-analyzer-redis-1 redis-cli monitor
 ### Watch Background Worker
 ```bash
 # Monitor job processing
-docker-compose logs -f api | grep "RedisBackgroundWorker"
+docker-compose logs -f api | grep "AnalysisBackgroundService"
 ```
 
 ### Check Cache Keys

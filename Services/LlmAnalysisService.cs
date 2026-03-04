@@ -13,20 +13,20 @@ namespace PullRequestAnalyzer.Services;
 /// <summary>
 /// Production-ready Semantic Kernel Analysis Service with OpenTelemetry tracing to Langfuse
 /// </summary>
-public sealed class SemanticKernelAnalysisServiceWithOtel : IAnalysisService
+public sealed class LlmAnalysisService : IAnalysisService
 {
     private readonly Kernel _kernel;
     private readonly IChatCompletionService _chatService;
     private readonly DiffChunkingService _chunker;
     private readonly IPromptTemplateService _promptTemplates;
-    private readonly ILogger<SemanticKernelAnalysisServiceWithOtel> _logger;
+    private readonly ILogger<LlmAnalysisService> _logger;
     private readonly string _modelName;
 
-    public SemanticKernelAnalysisServiceWithOtel(
+    public LlmAnalysisService(
         DiffChunkingService chunker,
         IPromptTemplateService promptTemplates,
         IConfiguration config,
-        ILogger<SemanticKernelAnalysisServiceWithOtel> logger)
+        ILogger<LlmAnalysisService> logger)
     {
         _chunker = chunker;
         _promptTemplates = promptTemplates;

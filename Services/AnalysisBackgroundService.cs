@@ -5,23 +5,23 @@ using PullRequestAnalyzer.Models;
 
 namespace PullRequestAnalyzer.Services;
 
-public sealed class RedisBackgroundWorker : BackgroundService
+public sealed class AnalysisBackgroundService : BackgroundService
 {
     private static readonly TimeSpan PollInterval  = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ErrorCooldown = TimeSpan.FromSeconds(5);
 
-    private readonly RedisJobQueue    _queue;
-    private readonly RedLockService   _lock;
+    private readonly JobQueueService    _queue;
+    private readonly DistributedLockService   _lock;
     private readonly RedisCacheService _cache;
     private readonly IServiceProvider _serviceProvider;
-    private readonly ILogger<RedisBackgroundWorker> _logger;
+    private readonly ILogger<AnalysisBackgroundService> _logger;
 
-    public RedisBackgroundWorker(
-        RedisJobQueue queue,
-        RedLockService @lock,
+    public AnalysisBackgroundService(
+        JobQueueService queue,
+        DistributedLockService @lock,
         RedisCacheService cache,
         IServiceProvider serviceProvider,
-        ILogger<RedisBackgroundWorker> logger)
+        ILogger<AnalysisBackgroundService> logger)
     {
         _queue    = queue;
         _lock     = @lock;

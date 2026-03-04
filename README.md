@@ -1,6 +1,6 @@
-# Pull Request Analyzer
+# Pull Request Analyzer 🔍
 
-A production-ready Pull Request analysis service that uses AI to understand what was **actually implemented** vs what was **claimed** in pull requests, helping engineering leaders reduce miscommunication and ensure code changes align with intended features.
+A production-ready system that analyzes GitHub pull requests using LLM-powered workflows to understand what was actually implemented based on real diffs, not just commit messages.
 
 ## 🎯 Core Value Proposition
 
@@ -157,11 +157,11 @@ pull-request-analyzer/
 │   ├── PullRequestData.cs         # GitHub PR models
 │   └── PrIdentifier.cs            # PR identification
 ├── Services/
-│   ├── SemanticKernelAnalysisService.cs  # AI analysis with SK
+│   ├── LlmAnalysisService.cs            # AI analysis with LLM
 │   ├── GitHubIngestService.cs           # GitHub API integration
 │   ├── RedisCacheService.cs             # Caching layer
-│   ├── RedisJobQueue.cs                 # Async job queue
-│   ├── RedisBackgroundWorker.cs         # Job processor
+│   ├── JobQueueService.cs               # Async job queue
+│   ├── AnalysisBackgroundService.cs     # Job processor
 │   └── WebhookService.cs                # Webhook notifications
 ├── Messages/
 │   ├── AnalyzePullRequestCommand.cs     # Job commands

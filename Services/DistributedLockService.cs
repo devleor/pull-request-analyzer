@@ -5,7 +5,7 @@ using StackExchange.Redis;
 
 namespace PullRequestAnalyzer.Services;
 
-public sealed class RedLockService : IDisposable
+public sealed class DistributedLockService : IDisposable
 {
     private const string LockPrefix = "lock:analyze:";
 
@@ -14,9 +14,9 @@ public sealed class RedLockService : IDisposable
     private static readonly TimeSpan Retry  = TimeSpan.FromMilliseconds(200);
 
     private readonly RedLockFactory _factory;
-    private readonly ILogger<RedLockService> _logger;
+    private readonly ILogger<DistributedLockService> _logger;
 
-    public RedLockService(IConnectionMultiplexer redis, ILogger<RedLockService> logger)
+    public DistributedLockService(IConnectionMultiplexer redis, ILogger<DistributedLockService> logger)
     {
         _logger  = logger;
         _factory = RedLockFactory.Create([new RedLockMultiplexer(redis)]);

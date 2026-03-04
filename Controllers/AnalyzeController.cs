@@ -140,7 +140,7 @@ public sealed class AnalyzeController : ControllerBase
     private async Task<ActionResult> SubmitAsyncAnalysis(PullRequestData pullRequest, string webhookUrl)
     {
         // Inject dependencies we need for async processing
-        var queue = HttpContext.RequestServices.GetRequiredService<RedisJobQueue>();
+        var queue = HttpContext.RequestServices.GetRequiredService<JobQueueService>();
 
         var command = new AnalyzePullRequestCommand
         {

@@ -4,7 +4,7 @@ using StackExchange.Redis;
 
 namespace PullRequestAnalyzer.Services;
 
-public sealed class RedisJobQueue
+public sealed class JobQueueService
 {
     private const string StreamKey  = "queue:analyze";
     private const string DlqKey     = "queue:analyze:dlq";
@@ -13,9 +13,9 @@ public sealed class RedisJobQueue
 
     private readonly string   _consumerName = $"worker-{Environment.MachineName}-{Guid.NewGuid():N}";
     private readonly IDatabase _db;
-    private readonly ILogger<RedisJobQueue> _logger;
+    private readonly ILogger<JobQueueService> _logger;
 
-    public RedisJobQueue(IConnectionMultiplexer redis, ILogger<RedisJobQueue> logger)
+    public JobQueueService(IConnectionMultiplexer redis, ILogger<JobQueueService> logger)
     {
         _db     = redis.GetDatabase();
         _logger = logger;
